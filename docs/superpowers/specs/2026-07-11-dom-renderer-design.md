@@ -139,6 +139,48 @@ OpenFin window (`npm run openfin:showcase`).
   a results addendum.
 - Existing `test:worker` untouched (compute shared, not duplicated).
 
+## Results addendum (measured 2026-07-11)
+
+Setup: DomVsCanvas showcase page, 60k rows × 14 cols, flat, ticks at 5,000
+updates/s during all runs, scroll at 60px/frame for 3s, tickLatency = 30
+single-cell samples (double-rAF). DOM grid in worker-materialized mode unless
+noted. Machine: Apple Silicon macOS; OpenFin runtime 43.142.104.1 (GPU on).
+
+| Scenario | Renderer | scroll p50/p90 ms | avg fps | tick p50/p95 ms |
+|---|---|---|---|---|
+| Chrome, normal | canvas | 8.3 / 9.2 | 120 | 16.7 / 17.6 |
+| Chrome, normal | DOM (worker) | 8.3 / 9.0 | 120 | 16.7 / 17.5 |
+| Chrome, 6× CPU throttle | canvas | 16.2 / 25.1 | 67 | 21.0 / 33.2 |
+| Chrome, 6× CPU throttle | DOM (worker) | 24.5 / 33.4 | 42 | 27.4 / 43.4 |
+| Chrome, 6× CPU throttle | DOM (main) | 17.1 / 33.1 | 47 | 20.5 / 37.6 |
+| OpenFin (GPU on) | canvas | 8.3 / 9.0 | 120 | 16.6 / 17.8 |
+| OpenFin (GPU on) | DOM (worker) | 8.3 / 9.1 | 120 | 16.5 / 19.3 |
+
+Interpretation:
+
+- **At full speed (Chrome and healthy OpenFin) the two renderers are a dead
+  heat at the display cap** — both 120fps, one-frame tick latency. The
+  worker-materialized DOM path adds no measurable cost when the CPU is fast.
+- **Under 6× CPU throttle the canvas renderer wins scrolling** (67fps vs
+  42fps worker / 47fps main). Credit where due: this is the scroll-blit
+  optimization — canvas now repaints only scrolled-in rows via one
+  drawImage, which is cheaper than DOM row rebinding + style recalc under a
+  slow CPU. Pre-blit canvas measured 23fps on comparable load, so both
+  renderers beat the original baseline.
+- **Worker mode costs ~7ms p50 on throttled scroll vs main mode** (24.5 vs
+  17.1) — the async render-window round-trip. In exchange the UI thread does
+  zero format/style work (profile-verified), leaving headroom for app code
+  that a scroll-fps number does not capture.
+- **Caveat**: 6× CPU throttling approximates a slow main thread but NOT
+  GPU-disabled compositing, where canvas pays extra for full-surface
+  uploads/blends and DOM benefits from retained-mode tile caching. The
+  decisive OpenFin-VDI comparison (`--disable-gpu` runtime args) is the
+  remaining follow-up measurement.
+- Structural (unmeasured here): the DOM renderer gets accessibility, IME,
+  and text selection for free, and its tick path has no sustained repaint
+  loop (CSS animation flash) — the canvas grid keeps a full-repaint rAF loop
+  alive during flash decay.
+
 ## Phase 2 (approved direction): FINOS Perspective engine behind the same seam
 
 After the renderer comparison lands, add a `PerspectiveEngine` option: the

@@ -18,7 +18,7 @@
 - Worker-eligible render config is declarative only: `ColDef.format` (format DSL), `type: 'number'` default formatting, rules (@tabular/rules). JS callbacks (`valueFormatter`, function `cellStyle`, `valueGetter`) force the main-thread materializer (log one dev warning naming the column).
 - Render messages carry `modelRevision`; the UI drops responses/deltas older than the last applied revision.
 - No per-cell event listeners; one delegated listener set on the grid root.
-- No inline styles for anything expressible as a class; inline style only for geometry (`transform`, `width`, `left`, `paddingLeft`).
+- No inline styles for anything expressible as a class; inline style only for geometry (`transform`, `width`, `left`, `paddingLeft`) plus pool `display` show/hide toggles; `data-row`/`data-odd` attributes are the sanctioned non-class state (zebra CSS + hit-testing read them).
 - Style table capped at 1024 ids; on overflow evict LRU and `console.warn` once.
 - All packages keep `npm run typecheck` green.
 - Out of scope (ignore silently): editing, clipboard, master/detail, pivot chrome, floating filters, side bar, pagination, tree data, calc columns, cell spanning, full-width rows.
