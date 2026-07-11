@@ -7,8 +7,9 @@ const ROWS = 60_000;
 const METRICS = 8;
 
 /**
- * Task 5 smoke page: a single `TabularDom` in main (fallback) mode over 60k
- * rows. Fleshed out into a side-by-side DOM-vs-canvas comparison in Task 8.
+ * Task 7 smoke page: a single `TabularDom` in worker mode over 60k rows — the
+ * UI thread stamps only precomputed text/style ids from the worker render
+ * plane. Fleshed out into a side-by-side DOM-vs-canvas comparison in Task 8.
  */
 export function DomVsCanvasPage() {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -18,7 +19,7 @@ export function DomVsCanvasPage() {
     const defs: ColDef<WideRow>[] = [
       { field: 'id', headerName: 'Id', width: 90 },
       { field: 'name', headerName: 'Name', width: 180 },
-      { field: 'group', headerName: 'Group', width: 90 },
+      { field: 'group', headerName: 'Group', width: 90, rowGroup: true },
     ];
     for (let m = 0; m < METRICS; m++) {
       defs.push({
@@ -40,7 +41,7 @@ export function DomVsCanvasPage() {
       columnDefs,
       getRowId: (p) => p.data.id,
       density: 'compact',
-      rowDataMode: 'main',
+      rowDataMode: 'worker',
     };
     const grid = new TabularDom<WideRow>(host, options);
     grid.setRowData(rowData);
@@ -50,10 +51,11 @@ export function DomVsCanvasPage() {
   return (
     <main className="page">
       <div className="page-head">
-        <h2>DOM renderer — {ROWS.toLocaleString()} rows (main mode)</h2>
+        <h2>DOM renderer — {ROWS.toLocaleString()} rows (worker mode)</h2>
         <p>
-          A pure-DOM `TabularDom` running the main-thread materializer fallback. Scroll end to end,
-          click a header to sort, and (when grouped) click a group row to expand or collapse.
+          A pure-DOM `TabularDom` running the worker render plane — the UI thread stamps only
+          precomputed cells. Scroll end to end, click a header to sort, and click a group row to
+          expand or collapse.
         </p>
       </div>
       <div className="grid-wrap">

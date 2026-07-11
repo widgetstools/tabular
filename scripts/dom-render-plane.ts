@@ -95,6 +95,29 @@ assert.ok(deltas[0]!.dir === 1);
 // deltas outside the window are dropped.
 assert.equal(plane.deltasFor([{ rowId: 'r50', colId: 'price', dir: -1 }], 0, 9).length, 0);
 
+// ── RenderDeltas.firstRow: rowIndex is relative to the window's firstRow ──
+// The pushed RenderDeltas message carries `firstRow` (the worker's last
+// renderWindow); the client reconstructs the absolute displayed index as
+// firstRow + rowIndex. Verify deltasFor over an offset window yields a
+// window-relative rowIndex so that firstRow + rowIndex lands on the right row.
+{
+  const winFirst = 5;
+  const offWin = plane.materialize(winFirst, winFirst + 9);
+  assert.equal(offWin.firstRow, winFirst);
+  const updated7 = { ...rows[7], price: 4242.5 };
+  pipeline.applyAndResolve({ updateIds: ['r7'], update: [updated7] });
+  const offDeltas = plane.deltasFor(
+    [{ rowId: 'r7', colId: 'price', dir: 1 }],
+    winFirst,
+    winFirst + 9,
+  );
+  assert.equal(offDeltas.length, 1);
+  // window-relative: r7 sits at displayed index 7, window starts at 5 → 2.
+  assert.equal(offDeltas[0]!.rowIndex, 2);
+  // absolute index the client computes as firstRow + rowIndex must be 7.
+  assert.equal(offWin.firstRow + offDeltas[0]!.rowIndex, 7);
+}
+
 // ── Review fix 2: structural rebuilds bump modelRevision ─────────────
 // An add-only transaction rebuilds the displayed model (applyAndResolve →
 // kind 'model'); the next materialize must carry a bumped revision so two

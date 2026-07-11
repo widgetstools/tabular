@@ -27,7 +27,10 @@ import type { RulesEvalResult } from '@tabular/rules';
 export interface DataWorkerLike {
   postMessage(msg: unknown, transfer?: Transferable[]): void;
   addEventListener(type: 'message', cb: (e: { data: unknown }) => void): void;
+  /** Worker crash / uncaught error (and deserialization failures). */
+  addEventListener(type: 'error' | 'messageerror', cb: (e: unknown) => void): void;
   removeEventListener?(type: 'message', cb: (e: { data: unknown }) => void): void;
+  removeEventListener?(type: 'error' | 'messageerror', cb: (e: unknown) => void): void;
   terminate(): void;
 }
 
@@ -41,6 +44,7 @@ export class DataWorkerClient {
   private pending = new Map<ReqId, PendingHandler>();
   private destroyed = false;
   private readonly messageHandler: (e: { data: unknown }) => void;
+  private readonly errorHandler: (e: unknown) => void;
 
   private pendingOutput: WorkerModelOutput | null = null;
   private pendingRules: RulesEvalResult | undefined;
@@ -56,12 +60,27 @@ export class DataWorkerClient {
     private onAggregatesUpdated?: (updates: GroupAggUpdate[]) => void,
     // Additive (Task 6): render-delta push consumer.
     private onRenderDeltas?: (deltas: RenderDeltas) => void,
+    // Additive (Task 7): worker crash / deserialization-failure hook. Lets the
+    // host degrade to the main thread when the worker dies (e.g. killed in
+    // DevTools) instead of stalling on requests that will never resolve.
+    private onError?: (e: unknown) => void,
   ) {
     this.messageHandler = (e) => {
       if (this.destroyed) return;
       this.onMessage(e.data as DataWorkerResponse | DataWorkerPush);
     };
+    this.errorHandler = (e) => {
+      if (this.destroyed) return;
+      // Reject all in-flight requests so awaited ops don't hang forever, then
+      // notify the host to fall back.
+      const err = new Error('worker error');
+      for (const p of this.pending.values()) p.reject(err);
+      this.pending.clear();
+      this.onError?.(e);
+    };
     worker.addEventListener('message', this.messageHandler);
+    worker.addEventListener('error', this.errorHandler);
+    worker.addEventListener('messageerror', this.errorHandler);
   }
 
   private onMessage(msg: DataWorkerResponse | DataWorkerPush): void {
@@ -244,6 +263,8 @@ export class DataWorkerClient {
     this.pendingOutput = null;
     this.pendingAggUpdates.clear();
     this.worker.removeEventListener?.('message', this.messageHandler);
+    this.worker.removeEventListener?.('error', this.errorHandler);
+    this.worker.removeEventListener?.('messageerror', this.errorHandler);
     this.worker.terminate();
   }
 }

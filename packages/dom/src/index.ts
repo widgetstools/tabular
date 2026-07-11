@@ -4,4 +4,7 @@ export type { CellRender, RowMeta, RenderView } from './renderView';
 export { RowPool } from './rowPool';
 export type { PoolGeometry } from './rowPool';
 export { MainMaterializer, readFieldValue } from './mainMaterializer';
+export { WorkerMaterializer } from './workerMaterializer';
+export type { WorkerMaterializerCallbacks } from './workerMaterializer';
+export { buildWorkerConfig, buildRenderConfig } from './workerFeed';
 export { TabularDom } from './domGrid';

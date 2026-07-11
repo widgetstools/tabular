@@ -6,6 +6,7 @@ import { DataWorkerClient } from './dataClient';
 import type {
   AggTransactionPayload,
   GroupAggUpdate,
+  RenderDeltas,
   ViewportChunk,
   ViewportRequest,
   WorkerModelOutput,
@@ -28,6 +29,12 @@ export interface WorkerCoordinatorHost {
   patchGroupAggregates(updates: GroupAggUpdate[]): CellChange[];
   fallbackToMain(reason: string): void;
   onRulesResult?(rules: RulesEvalResult): void;
+  /**
+   * Render plane (Task 6/7): pushed pre-rendered tick deltas for the last
+   * requested render window. Only the DOM worker materializer sets this; the
+   * canvas host leaves it undefined (deltas are then ignored).
+   */
+  onRenderDeltas?(deltas: RenderDeltas): void;
   /** True when the main-thread row mirror is still retained. */
   readonly dataMirrorActive: boolean;
   restoreDataMirror(rows: unknown[]): void;
@@ -170,6 +177,18 @@ export class WorkerCoordinator {
           } else {
             this.host.requestPaint({ prefetch: false });
           }
+        },
+        // Render plane (Task 7): forward pre-rendered tick deltas to the host
+        // (DOM worker materializer stamps them; canvas host leaves it unset).
+        (deltas) => {
+          if (this.host.destroyed || !this.dataWorkerActive) return;
+          this.host.onRenderDeltas?.(deltas);
+        },
+        // Task 7: a worker crash (uncaught error / killed in DevTools) degrades
+        // to the main thread through the same fallback path as op-chain errors.
+        () => {
+          if (this.host.destroyed) return;
+          this.fallbackDataWorker('worker error');
         },
       );
       return this.dataWorker;

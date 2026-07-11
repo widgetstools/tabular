@@ -256,6 +256,14 @@ export interface RenderWindowResult {
 export interface RenderDeltas {
   type: 'renderDeltas';
   modelRevision: number;
+  /**
+   * Displayed-row offset the deltas' `rowIndex` values are relative to — the
+   * `firstRow` of the worker's last-received `renderWindow` request. The client
+   * computes the absolute displayed index as `firstRow + delta.rowIndex` and
+   * drops deltas whose absolute range no longer overlaps its current window
+   * (guards the window race where the client has since requested a newer range).
+   */
+  firstRow: number;
   deltas: Array<{ rowIndex: number; colIndex: number; text: string; styleId: number; dir: 1 | -1 | 0 }>;
   styleTableVersion: number;
   styleTable?: import('../types').CellStyle[];

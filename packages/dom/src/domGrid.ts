@@ -13,16 +13,21 @@
  */
 
 import type {
+  AggTransactionPayload,
   GridOptions,
   GroupRefreshOptions,
   InternalColumn,
+  RenderDeltas,
 } from '@tabular/core';
-import { ColumnModel, RowModel, resolveTheme } from '@tabular/core';
+import { ColumnModel, RowModel, WorkerCoordinator, resolveTheme } from '@tabular/core';
 import type { ResolvedTheme } from '@tabular/core';
 import { CLS, StyleTable, applyThemeVars, ensureDomGridStyles } from './styles';
 import { computeWindow, poolSize } from './window';
 import { RowPool, type PoolGeometry } from './rowPool';
 import { MainMaterializer, readFieldValue } from './mainMaterializer';
+import type { RenderView } from './renderView';
+import { WorkerMaterializer } from './workerMaterializer';
+import { buildRenderConfig, buildWorkerConfig } from './workerFeed';
 
 /** Px of extra left padding per group nesting level (added to the base cell padding). */
 const GROUP_INDENT = 16;
@@ -51,8 +56,21 @@ export class TabularDom<TData = unknown> {
   private readonly cols: ColumnModel<TData>;
   private readonly rows: RowModel<TData>;
   private readonly styleTable: StyleTable;
-  private readonly view: MainMaterializer<TData>;
+  /** Synchronous main-thread view; always-correct fallback. */
+  private readonly mainMat: MainMaterializer<TData>;
+  /** Active read model the pool binds from (main or worker). */
+  private view: RenderView<TData>;
   private readonly pool: RowPool<TData>;
+
+  /** Current render path. Worker mode stamps only precomputed cells. */
+  private mode: 'main' | 'worker' = 'main';
+  private readonly workerCoord: WorkerCoordinator;
+  private workerMat: WorkerMaterializer<TData> | null = null;
+  /** Latched after a worker fallback so we never re-init the worker. */
+  private workerFellBack = false;
+  private destroyed = false;
+  /** rAF handle coalescing worker repaints (agg pushes / model syncs). */
+  private workerRepaintRaf: number | null = null;
 
   private readonly headerEl: HTMLDivElement;
   private readonly headerInner: HTMLDivElement;
@@ -125,7 +143,9 @@ export class TabularDom<TData = unknown> {
     this.rows = new RowModel<TData>(getRowId ? (d) => getRowId({ data: d }) : undefined);
     this.rows.quickFilter = options.quickFilterText ?? '';
     this.styleTable = new StyleTable();
-    this.view = new MainMaterializer<TData>(this.rows, this.cols, this.styleTable, options.formatting);
+    this.mainMat = new MainMaterializer<TData>(this.rows, this.cols, this.styleTable, options.formatting);
+    this.view = this.mainMat;
+    this.workerCoord = new WorkerCoordinator(this.buildWorkerHost());
     this.pool = new RowPool<TData>(this.layerEl);
     this.geo = this.buildGeometry();
 
@@ -146,6 +166,7 @@ export class TabularDom<TData = unknown> {
 
   /** Replaces all row data and rebuilds the displayed model. */
   setRowData(rows: TData[]): void {
+    this.workerCoord.onRowDataReset(rows);
     this.rows.setRowData(rows);
     this.refreshModel();
   }
@@ -164,8 +185,17 @@ export class TabularDom<TData = unknown> {
     }
   }
 
-  /** Re-runs filter/sort/group into the displayed model and repaints. */
+  /**
+   * Re-runs the displayed model and repaints. Prefers the worker render plane
+   * when eligible (`rowDataMode !== 'main'`, no ineligible configs, no prior
+   * fallback); otherwise runs the synchronous main-thread path.
+   */
   refreshModel(): void {
+    if (this.syncWorker()) return;
+    // Main-thread path (fallback / ineligible).
+    if (this.workerCoord.dataPlaneActive) this.workerCoord.teardown();
+    this.mode = 'main';
+    this.view = this.mainMat;
     const groupCols = this.cols.getRowGroupCols();
     const groupOpts: GroupRefreshOptions<TData> | null =
       groupCols.length > 0
@@ -178,17 +208,69 @@ export class TabularDom<TData = unknown> {
           }
         : null;
     this.rows.refresh(this.cols, this.valueOf, undefined, groupOpts, null);
-    this.view.refreshColumns();
+    this.mainMat.refreshColumns();
     this.pool.invalidate();
     this.layout();
   }
 
+  /**
+   * Drive the worker render plane for the current model, returning true when
+   * the worker path is taken. Builds the pipeline + render configs; on any
+   * ineligibility (or a prior fallback) it returns false so the caller runs
+   * the main path. The worker's model output arrives asynchronously via the
+   * coordinator host's `applyWorkerModel`.
+   */
+  private syncWorker(): boolean {
+    if (this.workerFellBack || this.options.rowDataMode === 'main') return false;
+    const workerConfig = buildWorkerConfig(this.cols, this.rows, this.options);
+    const renderConfig = workerConfig ? buildRenderConfig(this.cols) : null;
+    if (!workerConfig || !renderConfig) {
+      if (this.options.rowDataMode === 'worker') this.workerCoord.logIneligibleWarning();
+      return false;
+    }
+
+    const ids: string[] = [];
+    const rowsArr: unknown[] = [];
+    for (const row of this.rows.sourceRows) {
+      ids.push(this.rows.getId(row));
+      rowsArr.push(row);
+    }
+    this.workerCoord.syncDataPlane(workerConfig, ids, rowsArr);
+    const client = this.workerCoord.dataClient;
+    if (!client || !this.workerCoord.dataPlaneActive) {
+      // Construction failed → coordinator already fired fallbackToMain.
+      return false;
+    }
+    // Ship the render config, then bind through a fresh worker view. Ordering:
+    // this posts setRenderConfig before the first renderWindow (both synchronous).
+    void client.setRenderConfig(renderConfig).catch(() => {
+      /* fallback handled by the coordinator op-chain */
+    });
+    this.workerMat = new WorkerMaterializer<TData>(
+      this.rows,
+      () => this.workerCoord.dataClient,
+      renderConfig,
+      this.styleTable,
+      { onDelta: (rowIndex, colIndex, dir) => this.onWorkerDelta(rowIndex, colIndex, dir) },
+    );
+    this.workerMat.onUpdate(() => this.onWorkerWindowUpdate());
+    this.view = this.workerMat;
+    this.mode = 'worker';
+    this.mainMat.refreshColumns(); // keep the fallback view column-current
+    this.pool.invalidate();
+    this.layout();
+    return true;
+  }
+
   /** Releases every resource: listeners, observer, rAF, timer, pool, styles, DOM. */
   destroy(): void {
+    this.destroyed = true;
     this.abort.abort();
     this.ro.disconnect();
     if (this.rafScroll != null) cancelAnimationFrame(this.rafScroll);
+    if (this.workerRepaintRaf != null) cancelAnimationFrame(this.workerRepaintRaf);
     if (this.txTimer != null) clearTimeout(this.txTimer);
+    this.workerCoord.teardown();
     this.pool.clear();
     this.styleTable.dispose();
     this.root.innerHTML = '';
@@ -225,7 +307,7 @@ export class TabularDom<TData = unknown> {
     this.viewWidth = rect.width;
     this.viewHeight = rect.height;
     this.cols.setViewportWidth(this.viewWidth);
-    this.view.refreshColumns();
+    this.mainMat.refreshColumns();
     this.geo = this.buildGeometry();
 
     const rowCount = this.view.rowCount();
@@ -388,6 +470,18 @@ export class TabularDom<TData = unknown> {
     this.txTimer = null;
     const batch = this.txBatch;
     this.txBatch = { add: [], update: [], remove: [] };
+
+    if (this.mode === 'worker' && this.workerCoord.dataPlaneActive) {
+      // Worker mode: forward the raw transaction. Visible-cell updates arrive
+      // back as renderDeltas — the single source of truth. Keep the main row
+      // mirror in sync (structural adds/removes drive a fresh worker rebuild,
+      // and it backs a clean fallback), but never rebind from CellChanges here.
+      this.rows.applyTransaction(batch);
+      this.workerCoord.forwardTransaction(this.workerTransactionPayload(batch));
+      if (batch.add.length > 0 || batch.remove.length > 0) this.refreshModel();
+      return;
+    }
+
     const changes = this.rows.applyTransaction(batch);
     if (batch.add.length > 0 || batch.remove.length > 0) {
       this.refreshModel();
@@ -401,6 +495,100 @@ export class TabularDom<TData = unknown> {
       if (colIndex < 0) continue;
       this.pool.rebindCell(rowIndex, colIndex, this.view, this.geo, ch.dir);
     }
+  }
+
+  /** Build the worker transaction payload from a coalesced batch (mirrors grid.ts). */
+  private workerTransactionPayload(batch: TxBatch<TData>): AggTransactionPayload {
+    const payload: AggTransactionPayload = {};
+    if (batch.add.length) {
+      payload.addIds = batch.add.map((r) => this.rows.getId(r));
+      payload.add = batch.add as unknown[];
+    }
+    if (batch.update.length) {
+      payload.updateIds = batch.update.map((r) => this.rows.getId(r));
+      payload.update = batch.update as unknown[];
+    }
+    if (batch.remove.length) {
+      payload.removeIds = batch.remove.map((r) => this.rows.getId(r));
+    }
+    return payload;
+  }
+
+  // — worker glue —
+
+  /** Coordinator host mirroring grid.ts:379-411 (DOM no-ops where noted). */
+  private buildWorkerHost(): ConstructorParameters<typeof WorkerCoordinator>[0] {
+    const grid = this;
+    return {
+      get destroyed() {
+        return grid.destroyed;
+      },
+      // Worker agg / model pushes → coalesced re-request of the render window.
+      requestPaint: () => grid.scheduleWorkerRepaint(),
+      invalidateViewportPrefetch: () => {},
+      workerOwnsRowData: false,
+      updateStatusBar: () => {},
+      flashCellChange: () => {},
+      enableCellFlash: false,
+      applyWorkerModel: (output) => {
+        if (grid.destroyed) return;
+        grid.rows.applyWorkerModel(output);
+        grid.workerMat?.invalidate();
+        grid.layout();
+      },
+      patchGroupAggregates: (updates) => grid.rows.patchGroupAggregates(updates),
+      fallbackToMain: () => {
+        grid.workerFellBack = true;
+        grid.mode = 'main';
+        grid.view = grid.mainMat;
+        grid.refreshModel();
+      },
+      onRenderDeltas: (deltas) => grid.onRenderDeltas(deltas),
+      get dataMirrorActive() {
+        return grid.rows.dataMirrorActive;
+      },
+      restoreDataMirror: (rows) => grid.rows.restoreDataMirror(rows as TData[]),
+      syncWorkerRulesConfig: () => Promise.resolve(),
+    };
+  }
+
+  /** A pushed render-delta batch → patch the worker view + restamp cells. */
+  private onRenderDeltas(deltas: RenderDeltas): void {
+    if (this.destroyed || this.mode !== 'worker') return;
+    this.workerMat?.applyDeltas(deltas);
+  }
+
+  /** One patched worker cell → restamp it in place (if currently bound). */
+  private onWorkerDelta(rowIndex: number, colIndex: number, dir: 1 | -1 | 0): void {
+    this.pool.rebindCell(rowIndex, colIndex, this.view, this.geo, dir);
+  }
+
+  /**
+   * A fresh render window arrived → re-stamp the visible window from the cache.
+   * The pool must be invalidated first: the slots for these rows are already
+   * bound (the initial pre-fetch bind stamped placeholders), so without marking
+   * them dirty `bindWindow` would skip re-stamping and the freshly materialized
+   * text/styles would never reach the DOM.
+   */
+  private onWorkerWindowUpdate(): void {
+    if (this.destroyed || this.mode !== 'worker') return;
+    this.pool.invalidate();
+    this.syncViewport();
+  }
+
+  /**
+   * Coalesce worker-driven repaints (aggregate pushes, non-structural model
+   * syncs) to one refetch per frame: invalidate the cached window so the next
+   * bind refetches, then rebind.
+   */
+  private scheduleWorkerRepaint(): void {
+    if (this.destroyed || this.mode !== 'worker' || this.workerRepaintRaf != null) return;
+    this.workerRepaintRaf = requestAnimationFrame(() => {
+      this.workerRepaintRaf = null;
+      if (this.destroyed || this.mode !== 'worker') return;
+      this.workerMat?.invalidate();
+      this.syncViewport();
+    });
   }
 
   /** Maps a `CellChange.colKey` (a data field name) to a display column index. */

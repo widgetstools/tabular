@@ -134,7 +134,17 @@ export class RowPool<TData> {
       ? `${meta.level * geo.groupIndent + 20}px` : '';
     const cr = view.cell(r, c);
     const isNum = col.def.type === 'number';
-    cell.className = `${CLS.cell}${isNum ? ` ${CLS.num}` : ''}${cr?.styleClass ? ` ${cr.styleClass}` : ''}`;
+    // Preserve an in-flight tick flash when re-stamping the SAME row (a dirty
+    // re-stamp, e.g. an async worker window/aggregate refresh) so the animation
+    // isn't cut short. `slot.boundRow` still holds the pre-bind value here, so
+    // it equals `r` only for a same-row re-stamp — never for a fresh row bind.
+    const keepFlash =
+      slot.boundRow === r && cell.classList.contains(CLS.flashUp)
+        ? ` ${CLS.flashUp}`
+        : slot.boundRow === r && cell.classList.contains(CLS.flashDown)
+          ? ` ${CLS.flashDown}`
+          : '';
+    cell.className = `${CLS.cell}${isNum ? ` ${CLS.num}` : ''}${cr?.styleClass ? ` ${cr.styleClass}` : ''}${keepFlash}`;
     cell.classList.toggle(CLS.focusCell, focusedHere);
     const text = cr?.text ?? '';
     if (cell.textContent !== text) cell.textContent = text;

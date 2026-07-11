@@ -100,6 +100,9 @@ function pushRenderDeltas(
   const push: DataWorkerPush = {
     type: 'renderDeltas',
     modelRevision: plane.modelRevision,
+    // Window the deltas' rowIndex values are relative to (client maps to
+    // absolute displayed index as firstRow + rowIndex).
+    firstRow: win.firstRow,
     deltas,
     styleTableVersion,
     ...(includeTable ? { styleTable: plane.styleTableSnapshot() } : {}),

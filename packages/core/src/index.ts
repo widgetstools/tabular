@@ -129,11 +129,16 @@ export { ColumnModel } from './columnModel';
 export type { InternalColumn, Region } from './columnModel';
 export { WorkerCoordinator } from './worker/coordinator';
 export type { WorkerCoordinatorHost } from './worker/coordinator';
+export { DataWorkerClient } from './worker/dataClient';
+export { WORKER_AGG_FUNCS } from './worker/protocol';
 export type {
   WorkerPipelineConfig,
   WorkerModelOutput,
   GroupAggUpdate,
+  AggTransactionPayload,
+  WorkerAggFuncName,
   RenderPlaneConfig,
   RenderWindowResult,
   RenderDeltas,
 } from './worker/protocol';
+export { tokenizeQuickFilter } from './filters';
