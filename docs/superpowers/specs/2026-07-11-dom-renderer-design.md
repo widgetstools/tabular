@@ -181,6 +181,25 @@ Interpretation:
   loop (CSS animation flash) — the canvas grid keeps a full-repaint rAF loop
   alive during flash decay.
 
+## Follow-ups (from final whole-branch review, 2026-07-11)
+
+- Inherited: add @tabular/dom to the tracked core pendingTx/dataOnly worker
+  issue (add/remove transactions in worker mode hit the same coordinator drop
+  as the canvas path; update-only ticking — the benchmarked case — is
+  unaffected).
+- Grouped **main**-mode ticks don't reaggregate group/footer sums (worker
+  mode does); must land before publishing any grouped-main benchmark.
+- Focus should be keyed by rowId (currently rowIndex; goes stale on sort).
+- `setRenderConfig` should route through the coordinator op-chain so its
+  failure triggers fallback.
+- Grouped worker mode: restamp only group/footer rows per tick instead of
+  the full-window refetch (perf).
+- Style-table versions should be producer-epoch-namespaced before rules
+  styles land; MainMaterializer's fallback style cap needs warn-once/LRU.
+- Bench: the tick column measures post-apply frame cadence (60ms coalescing
+  included), not paint latency — label it as such if quoted; the decisive
+  OpenFin `--disable-gpu` scenario is still to be measured.
+
 ## Phase 2 (approved direction): FINOS Perspective engine behind the same seam
 
 After the renderer comparison lands, add a `PerspectiveEngine` option: the
