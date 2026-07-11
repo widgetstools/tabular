@@ -31,6 +31,7 @@
 | Tree data | no (follow-up) | yes |
 | valueGetter column (display only) | skip in field maps | paint via main valueOf if mirror present |
 | Active filter/sort on valueGetter/comparator | full plane fallback | yes |
+| Active quick filter with any valueGetter/no-field displayed col | full plane fallback | yes |
 | External filter present | full plane fallback | yes |
 | Custom function aggFunc | full plane fallback | yes |
 

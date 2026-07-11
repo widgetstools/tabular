@@ -2475,7 +2475,8 @@ export class Tabular<TData = unknown> {
    * sort/filter/group/agg/calc needs main-thread code (valueGetter,
    * comparator, function aggFunc, PREV/aggregate calc scopes).
    * Displayed columns with JS getters are skipped for the field maps rather
-   * than disqualifying the whole plane.
+   * than disqualifying the whole plane, except when quick filter is active
+   * (worker quick filter only searches field-backed cols).
    */
   private workerDataPlaneConfig(): WorkerPipelineConfig | null {
     if (this.options.rowDataMode === 'main') return null;
@@ -2525,6 +2526,14 @@ export class Tabular<TData = unknown> {
     for (const s of this.cols.sortModel()) {
       const col = this.cols.getColumn(s.colId);
       if (!col || !fieldByColId.has(s.colId) || col.def.comparator) return null;
+    }
+
+    // Quick filter only searches worker field cols; fall back to main when any
+    // displayed column lacks a worker field (valueGetter / no field).
+    if (tokenizeQuickFilter(this.rows.quickFilter).length > 0) {
+      for (const col of this.cols.displayed()) {
+        if (!this.workerColumnField(col)) return null;
+      }
     }
 
     const groupCols: WorkerPipelineConfig['groupCols'] = [];
@@ -2608,6 +2617,11 @@ export class Tabular<TData = unknown> {
       pivotCols: pivotMode ? pivotCols : undefined,
       valueCols: pivotMode ? valueCols : undefined,
     };
+  }
+
+  /** @internal Eligibility probe for scripts/eligibility-smoke.ts */
+  workerDataPlaneEligible(): boolean {
+    return this.workerDataPlaneConfig() != null;
   }
 
   /** Same predicate as main-thread refresh and worker pipeline pivot branch. */
