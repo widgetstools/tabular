@@ -76,11 +76,39 @@ resolve through the same resolver chain as canvas; results map to a
 precompiled class per rule where possible, inline style on the affected cell
 otherwise.
 
-### Compute (unchanged, shared)
+### Compute (shared) + render plane (worker-materialized)
 
-Same `RowModel`, worker pipeline, transaction paths, and format bridge as the
-canvas grid. Core's `index.ts` re-exports the needed internals; no deep
-`src/` imports across packages.
+Same `RowModel`, worker pipeline, and transaction paths as the canvas grid.
+Core's `index.ts` re-exports the needed internals; no deep `src/` imports
+across packages.
+
+**All data-plane work runs in the worker — including formatting and style
+computation.** The UI thread only stamps precomputed output:
+
+- **Render window**: the UI requests `[firstRow, lastRow]` (rAF-coalesced,
+  with overscan); the worker responds with flat arrays — formatted text per
+  cell, a style-class id per cell (`Uint16Array`, transferable), and row
+  metadata (kind/level/expanded/rowId). Binding a cell is `textContent` +
+  one class swap; no formatting, no style resolution, no expression
+  evaluation on the UI thread.
+- **Style table**: the worker dedupes resolved cell styles (rules engine
+  output + static `cellStyle` objects) into a versioned table; the UI
+  registers each table version once as generated CSS classes and thereafter
+  applies ids.
+- **Tick deltas**: for update transactions the worker pushes pre-rendered
+  deltas `{ rowIndex, colIndex, text, styleId, flashDir }`; the UI rebinds
+  only those visible cells and toggles the flash class.
+- **Versioning**: render responses and deltas carry a monotonically
+  increasing `modelRevision`; the UI drops anything older than the last
+  applied revision (avoids the stale-patch class of bugs found in review).
+
+**Worker eligibility for rendering**: declarative configs cross the worker
+boundary — `ColDef.format` (format DSL), rules (@tabular/rules), expression
+styles. Arbitrary JS callbacks (`valueFormatter`, function `cellStyle`,
+`valueGetter`) cannot; columns using them force main-thread materialization
+(same fallback pattern as the existing data-plane eligibility checks). The
+main-thread fallback uses the same materializer interface so the renderer
+code is identical in both modes.
 
 ## Comparison page & bench
 
@@ -110,6 +138,15 @@ OpenFin window (`npm run openfin:showcase`).
 - Bench numbers captured in the three scenarios and appended to this doc as
   a results addendum.
 - Existing `test:worker` untouched (compute shared, not duplicated).
+
+## Risks (render plane)
+
+- **Async window fetch**: fast scroll outruns the worker round-trip; UI keeps
+  the previous window bound (stale-but-correct) and binds fresh data on
+  arrival; overscan hides most of the gap. Revision checks prevent
+  out-of-order application.
+- **Style-table growth**: unbounded distinct styles would leak classes; the
+  table is capped (1024 ids) with LRU eviction and a dev warning.
 
 ## Risks
 
