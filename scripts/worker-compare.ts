@@ -6,12 +6,14 @@ import { DataPipeline } from '../packages/core/src/worker/pipeline';
 import { FilterPass } from '../packages/core/src/worker/passes/filterPass';
 import { SortPass } from '../packages/core/src/worker/passes/sortPass';
 import { GroupPass } from '../packages/core/src/worker/passes/groupPass';
+import { PivotPass } from '../packages/core/src/worker/passes/pivotPass';
 import { CalcPass } from '../packages/core/src/worker/passes/calcPass';
 import { AggScopeResolver, buildGroupRowIndex } from '../packages/core/src/worker/passes/aggScopePass';
 import { PrevStore } from '../packages/core/src/worker/prevStore';
 import { RowStore } from '../packages/core/src/worker/rowStore';
 import { workerCalcField } from '../packages/core/src/worker/protocol';
 import type { WorkerDisplayEntry, WorkerPipelineConfig } from '../packages/core/src/worker/protocol';
+import { pivotResultColId } from '../packages/core/src/pivot';
 import type { FilterModel, SortModelItem } from '../packages/core/src/types';
 
 interface BondRow {
@@ -128,19 +130,73 @@ function referenceDisplayed(
   );
   const readGroup = (id: string) => calcPass.mergedRow(id, readRaw(id));
 
-  const displayed = new GroupPass().apply(
-    store,
-    ids,
-    {
-      groupCols: config.groupCols,
-      aggCols: config.aggCols,
-      groupDefaultExpanded: config.groupDefaultExpanded,
-      expandedState: config.expandedState,
-      groupTotalRow: config.groupTotalRow,
-      grandTotalRow: config.grandTotalRow,
-    },
-    readGroup,
-  );
+  const pivotActive =
+    config.pivotMode === true &&
+    (config.pivotCols?.length ?? 0) > 0 &&
+    (config.valueCols?.length ?? 0) > 0;
+
+  const groupOpts = {
+    groupCols: config.groupCols,
+    aggCols: pivotActive ? [] : config.aggCols,
+    groupDefaultExpanded: config.groupDefaultExpanded,
+    expandedState: config.expandedState,
+    groupTotalRow: config.groupTotalRow,
+    groupSuppressBlankHeader: config.groupSuppressBlankHeader,
+    grandTotalRow: config.grandTotalRow,
+    suppressLeafRows: config.suppressLeafRows,
+  };
+
+  const groupPass = new GroupPass();
+  let displayed: WorkerDisplayEntry[];
+
+  if (pivotActive) {
+    const roots = groupPass.buildTreeOnly(
+      store,
+      ids,
+      {
+        groupCols: config.groupCols,
+        groupDefaultExpanded: config.groupDefaultExpanded,
+        expandedState: config.expandedState,
+      },
+      readGroup,
+    );
+    const pivotPass = new PivotPass();
+    const pivotKeyPaths = pivotPass.collectKeyPaths(ids, config.pivotCols!, readGroup);
+    if (pivotKeyPaths.length) {
+      pivotPass.apply(roots, config.pivotCols!, config.valueCols!, pivotKeyPaths, readGroup);
+    }
+    displayed = groupPass.flattenRoots(roots, groupOpts);
+    if (config.grandTotalRow && roots.length && pivotKeyPaths.length) {
+      const grandAgg = pivotPass.grandTotalAggData(
+        roots,
+        config.pivotCols!,
+        config.valueCols!,
+        pivotKeyPaths,
+        readGroup,
+      );
+      const leafCount = roots.reduce((n, r) => n + r.childCount, 0);
+      const grand: WorkerDisplayEntry = {
+        id: 'grand-total',
+        kind: 'grandTotal',
+        level: 0,
+        expanded: false,
+        key: 'Grand Total',
+        field: '',
+        childCount: leafCount,
+        groupId: null,
+        aggData: grandAgg,
+      };
+      if (config.grandTotalRow === 'top') displayed.unshift(grand);
+      else displayed.push(grand);
+    }
+  } else {
+    displayed = groupPass.apply(
+      store,
+      ids,
+      groupOpts,
+      readGroup,
+    );
+  }
   return displayed;
 }
 
@@ -458,12 +514,96 @@ for (let seed = 1; seed <= 3; seed++) {
   }
 }
 
+// Olympic-shaped pivot: country row group, sport pivot, gold sum
+{
+  interface OlympicRow {
+    id: string;
+    country: string;
+    sport: string;
+    year: number;
+    gold: number;
+    silver: number;
+  }
+
+  const olympicRows: OlympicRow[] = [
+    { id: 'r0', country: 'USA', sport: 'Swimming', year: 2012, gold: 3, silver: 2 },
+    { id: 'r1', country: 'USA', sport: 'Swimming', year: 2016, gold: 4, silver: 1 },
+    { id: 'r2', country: 'USA', sport: 'Gymnastics', year: 2012, gold: 2, silver: 3 },
+    { id: 'r3', country: 'China', sport: 'Swimming', year: 2012, gold: 5, silver: 1 },
+    { id: 'r4', country: 'China', sport: 'Gymnastics', year: 2016, gold: 1, silver: 4 },
+    { id: 'r5', country: 'China', sport: 'Gymnastics', year: 2012, gold: 2, silver: 2 },
+  ];
+
+  const pivotConfig: WorkerPipelineConfig = {
+    filterCols: [],
+    sortCols: [],
+    calcCols: [],
+    filterModel: {},
+    quickFilterTerms: [],
+    sortModel: [],
+    groupCols: [{ colId: 'country', field: 'country' }],
+    aggCols: [],
+    groupDefaultExpanded: -1,
+    expandedState: [],
+    grandTotalRow: 'bottom',
+    suppressLeafRows: true,
+    pivotMode: true,
+    pivotCols: [{ colId: 'sport', field: 'sport' }],
+    valueCols: [{ colId: 'gold', field: 'gold', aggFunc: 'sum' }],
+  };
+
+  const ids = olympicRows.map((r) => r.id);
+  const store = new RowStore();
+  const pipeline = new DataPipeline();
+  store.setAll(ids, olympicRows as unknown as Record<string, unknown>[]);
+  pipeline.setRowData(ids, olympicRows as unknown as Record<string, unknown>[]);
+  pipeline.setConfig(pivotConfig);
+
+  const out = pipeline.rebuild();
+  const refDisplayed = referenceDisplayed(store, pivotConfig);
+  mismatches += compareDisplayedAgg(out.displayed, refDisplayed, 'olympic-pivot initial');
+
+  const swimGoldCol = pivotResultColId(['Swimming'], 'gold');
+  const usaGroup = out.displayed.find((d) => d.id === 'g:country:USA');
+  if (!usaGroup || usaGroup.aggData[swimGoldCol] !== 7) {
+    mismatches++;
+    console.error(
+      `olympic-pivot: USA Swimming gold expected 7, got ${String(usaGroup?.aggData[swimGoldCol])}`,
+    );
+  }
+
+  if (!out.pivotKeyPaths?.length) {
+    mismatches++;
+    console.error('olympic-pivot: missing pivotKeyPaths in output');
+  }
+
+  // Update-only tick: full rebuild path (v1)
+  const updatePayload = {
+    updateIds: ['r0'],
+    update: [{ ...olympicRows[0]!, gold: 10 }],
+  };
+  store.applyTransaction(updatePayload);
+  const resolved = pipeline.applyAndResolve(updatePayload);
+  if (resolved.kind !== 'model') {
+    mismatches++;
+    console.error(`olympic-pivot update: expected model rebuild, got ${resolved.kind}`);
+  } else {
+    const usaAfter = resolved.output.displayed.find((d) => d.id === 'g:country:USA');
+    if (usaAfter?.aggData[swimGoldCol] !== 14) {
+      mismatches++;
+      console.error(
+        `olympic-pivot update: USA Swimming gold expected 14, got ${String(usaAfter?.aggData[swimGoldCol])}`,
+      );
+    }
+  }
+}
+
 if (mismatches > 0) {
   console.error(`FAILED: ${mismatches} mismatch(es)`);
   process.exit(1);
 }
 
 console.log(
-  `OK: ${TX_COUNT} randomized transactions × 3 seeds + 500 update-only agg batches + 200 incremental applyAndResolve batches — DataPipeline parity (calc+agg+PREV)`,
+  `OK: ${TX_COUNT} randomized transactions × 3 seeds + 500 update-only agg batches + 200 incremental applyAndResolve batches + olympic pivot — DataPipeline parity (calc+agg+pivot+PREV)`,
 );
 process.exit(0);

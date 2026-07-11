@@ -131,6 +131,10 @@ export interface WorkerPipelineConfig {
   groupSuppressBlankHeader?: boolean;
   grandTotalRow?: 'top' | 'bottom';
   suppressLeafRows?: boolean;
+  /** Pivot mode — pivot aggregation runs after group pass when pivot cols + value cols present. */
+  pivotMode?: boolean;
+  pivotCols?: Array<{ colId: string; field: string }>;
+  valueCols?: WorkerAggColSpec[];
 }
 
 export interface WorkerDisplayEntry {
@@ -149,6 +153,8 @@ export interface WorkerModelOutput {
   filteredCount: number;
   filteredSortedIds: string[];
   displayed: WorkerDisplayEntry[];
+  /** Present when pivot aggregation ran; main builds pivot result columns. */
+  pivotKeyPaths?: string[][];
 }
 
 export type DataWorkerPush =

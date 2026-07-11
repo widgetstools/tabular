@@ -18,6 +18,7 @@ import { CalcPass } from './passes/calcPass';
 import { FilterPass } from './passes/filterPass';
 import { SortPass } from './passes/sortPass';
 import { GroupPass } from './passes/groupPass';
+import { PivotPass } from './passes/pivotPass';
 import { AggScopeResolver, buildGroupRowIndex } from './passes/aggScopePass';
 import { sliceViewport, type ViewportColSpec } from './viewportSlicer';
 import { AggEngine } from './incrementalAgg';
@@ -30,6 +31,7 @@ export class DataPipeline {
   private store = new RowStore();
   private calcPass = new CalcPass();
   private aggEngine = new AggEngine();
+  private pivotPass = new PivotPass();
   private aggSpecs: AggSpec[] = [];
   private config: WorkerPipelineConfig | null = null;
   private lastOutput: WorkerModelOutput | null = null;
@@ -174,26 +176,75 @@ export class DataPipeline {
     const readForGroup = readMerged();
 
     const groupPass = new GroupPass();
-    const displayed = groupPass.apply(
-      this.store,
-      ids,
-      {
-        groupCols: cfg.groupCols,
-        aggCols: cfg.aggCols,
-        groupDefaultExpanded: cfg.groupDefaultExpanded,
-        expandedState: cfg.expandedState,
-        groupTotalRow: cfg.groupTotalRow,
-        groupSuppressBlankHeader: cfg.groupSuppressBlankHeader,
-        grandTotalRow: cfg.grandTotalRow,
-        suppressLeafRows: cfg.suppressLeafRows,
-      },
-      readForGroup,
-    );
+    const pivotActive =
+      cfg.pivotMode === true &&
+      (cfg.pivotCols?.length ?? 0) > 0 &&
+      (cfg.valueCols?.length ?? 0) > 0;
+
+    const groupOpts = {
+      groupCols: cfg.groupCols,
+      aggCols: pivotActive ? [] : cfg.aggCols,
+      groupDefaultExpanded: cfg.groupDefaultExpanded,
+      expandedState: cfg.expandedState,
+      groupTotalRow: cfg.groupTotalRow,
+      groupSuppressBlankHeader: cfg.groupSuppressBlankHeader,
+      grandTotalRow: cfg.grandTotalRow,
+      suppressLeafRows: cfg.suppressLeafRows,
+    };
+
+    let pivotKeyPaths: string[][] | undefined;
+    let displayed: WorkerModelOutput['displayed'];
+
+    if (pivotActive) {
+      const roots = groupPass.buildTreeOnly(
+        this.store,
+        ids,
+        {
+          groupCols: cfg.groupCols,
+          groupDefaultExpanded: cfg.groupDefaultExpanded,
+          expandedState: cfg.expandedState,
+        },
+        readForGroup,
+      );
+      pivotKeyPaths = this.pivotPass.collectKeyPaths(ids, cfg.pivotCols!, readForGroup);
+      if (pivotKeyPaths.length) {
+        this.pivotPass.apply(roots, cfg.pivotCols!, cfg.valueCols!, pivotKeyPaths, readForGroup);
+      }
+      displayed = groupPass.flattenRoots(roots, groupOpts);
+      if (cfg.grandTotalRow && roots.length) {
+        const grandAgg = pivotKeyPaths.length
+          ? this.pivotPass.grandTotalAggData(
+              roots,
+              cfg.pivotCols!,
+              cfg.valueCols!,
+              pivotKeyPaths,
+              readForGroup,
+            )
+          : {};
+        const leafCount = roots.reduce((n, r) => n + r.childCount, 0);
+        const grand = {
+          id: 'grand-total',
+          kind: 'grandTotal' as const,
+          level: 0,
+          expanded: false,
+          key: 'Grand Total',
+          field: '',
+          childCount: leafCount,
+          groupId: null,
+          aggData: grandAgg,
+        };
+        if (cfg.grandTotalRow === 'top') displayed.unshift(grand);
+        else displayed.push(grand);
+      }
+    } else {
+      displayed = groupPass.apply(this.store, ids, groupOpts, readForGroup);
+    }
 
     return this.finishRebuild({
       filteredCount: ids.length,
       filteredSortedIds: ids,
       displayed,
+      pivotKeyPaths,
     });
   }
 
@@ -207,6 +258,11 @@ export class DataPipeline {
     for (const a of config.aggCols) {
       aggInputFields.add(a.field);
       if (a.weightField) aggInputFields.add(a.weightField);
+    }
+    for (const c of config.pivotCols ?? []) pipelineFields.add(c.field);
+    for (const v of config.valueCols ?? []) {
+      aggInputFields.add(v.field);
+      if (v.weightField) aggInputFields.add(v.weightField);
     }
 
     const filterFields = new Set(config.filterCols.map((c) => c.field));
@@ -228,6 +284,14 @@ export class DataPipeline {
   private canUseIncrementalAgg(tx: AggTransactionPayload): boolean {
     const cfg = this.config;
     if (!cfg?.groupCols.length || !cfg.aggCols.length) return false;
+    // v1: pivot ticks always full-rebuild on worker (TODO: incremental pivot accumulators).
+    if (
+      cfg.pivotMode === true &&
+      (cfg.pivotCols?.length ?? 0) > 0 &&
+      (cfg.valueCols?.length ?? 0) > 0
+    ) {
+      return false;
+    }
     if (tx.addIds?.length || tx.add?.length || tx.removeIds?.length) return false;
     if (!tx.update?.length || !tx.updateIds?.length) return false;
 

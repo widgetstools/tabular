@@ -497,6 +497,9 @@ export class RowModel<TData = unknown> {
    * ids back to live objects held in `byId` unless the data mirror is dropped.
    */
   applyWorkerModel(output: WorkerModelOutput): void {
+    if (output.pivotKeyPaths !== undefined) {
+      this.lastPivotKeyPaths = output.pivotKeyPaths;
+    }
     this.filteredSorted = [];
     this.filteredSortedIds = [];
     for (const id of output.filteredSortedIds) {

@@ -2480,11 +2480,12 @@ export class Tabular<TData = unknown> {
   private workerDataPlaneConfig(): WorkerPipelineConfig | null {
     if (this.options.rowDataMode === 'main') return null;
     if (typeof Worker === 'undefined') return null;
-    if (this.cols.pivotMode) return null;
     if (this.options.treeData || this.options.getDataPath || this.options.treeDataChildrenField) {
       return null;
     }
     if (this.options.isExternalFilterPresent?.()) return null;
+
+    const pivotMode = this.cols.pivotMode;
 
     const dataFields = new Set<string>();
     for (const col of this.cols.all) {
@@ -2533,8 +2534,19 @@ export class Tabular<TData = unknown> {
       groupCols.push({ colId: c.colId, field });
     }
 
-    const aggCols: WorkerPipelineConfig['aggCols'] = [];
-    for (const spec of this.cols.getAggCols()) {
+    const pivotCols: NonNullable<WorkerPipelineConfig['pivotCols']> = [];
+    if (pivotMode) {
+      for (const spec of this.cols.getPivotCols()) {
+        const col = this.cols.getColumn(spec.colId);
+        const field = col ? this.workerColumnField(col) : spec.field;
+        if (!field) return null;
+        pivotCols.push({ colId: spec.colId, field });
+      }
+    }
+
+    const buildWorkerAggCol = (
+      spec: { colId: string; field?: string; aggFunc: unknown; weightField?: string },
+    ): WorkerPipelineConfig['aggCols'][number] | null => {
       const col = this.cols.getColumn(spec.colId);
       if (!spec.field || typeof spec.aggFunc !== 'string' || col?.def.valueGetter) return null;
       if (!WORKER_AGG_FUNCS.has(spec.aggFunc)) return null;
@@ -2542,12 +2554,32 @@ export class Tabular<TData = unknown> {
         col && col.def.calc && this.calcResolver.has(col.colId)
           ? workerCalcField(col.colId)
           : spec.field;
-      aggCols.push({
+      return {
         colId: spec.colId,
         field,
         aggFunc: spec.aggFunc as WorkerPipelineConfig['aggCols'][number]['aggFunc'],
         weightField: spec.weightField,
-      });
+      };
+    };
+
+    const valueCols: NonNullable<WorkerPipelineConfig['valueCols']> = [];
+    if (pivotMode) {
+      for (const spec of this.cols.getValueCols()) {
+        const built = buildWorkerAggCol(spec);
+        if (!built) return null;
+        valueCols.push(built);
+      }
+    }
+
+    const pivotActive = pivotMode && pivotCols.length > 0 && valueCols.length > 0;
+
+    const aggCols: WorkerPipelineConfig['aggCols'] = [];
+    if (!pivotActive) {
+      for (const spec of this.cols.getAggCols()) {
+        const built = buildWorkerAggCol(spec);
+        if (!built) return null;
+        aggCols.push(built);
+      }
     }
 
     const groupTotalRow = this.options.groupTotalRow;
@@ -2571,7 +2603,10 @@ export class Tabular<TData = unknown> {
         this.options.grandTotalRow === 'top' || this.options.grandTotalRow === 'bottom'
           ? this.options.grandTotalRow
           : undefined,
-      suppressLeafRows: this.cols.pivotMode,
+      suppressLeafRows: pivotMode,
+      pivotMode,
+      pivotCols: pivotMode ? pivotCols : undefined,
+      valueCols: pivotMode ? valueCols : undefined,
     };
   }
 
@@ -2588,11 +2623,37 @@ export class Tabular<TData = unknown> {
       this.workerCompareSnapshot = null;
     }
     this.viewportChunk = null;
+    if (output.pivotKeyPaths !== undefined) {
+      this.applyPivotResultColumnsFromPaths(output.pivotKeyPaths);
+    }
     this.rows.applyWorkerModel(output);
     if (this.workerOwnsRowDataActive()) {
       this.rows.dropDataMirror();
     }
     this.afterModelRefresh(true);
+  }
+
+  /** Build pivot result columns from worker-discovered key paths. */
+  private applyPivotResultColumnsFromPaths(paths: string[][]): void {
+    if (!paths.length) {
+      this.cols.clearPivotResultColumns();
+      return;
+    }
+    const build = buildPivotResultColumns(
+      paths,
+      this.cols.getValueCols(),
+      this.cols.valueColumns(),
+      this.cols.getPivotCols(),
+      {
+        processPivotResultColDef: this.options.processPivotResultColDef,
+        removePivotHeaderRowWhenSingleValueColumn:
+          this.options.removePivotHeaderRowWhenSingleValueColumn,
+        pivotDefaultExpanded: this.options.pivotDefaultExpanded,
+        suppressExpandablePivotGroups: this.options.suppressExpandablePivotGroups,
+      },
+    );
+    this.cols.applyPivotResult(build);
+    this.emit('columnPivotChanged', { columns: this.getPivotColumns() });
   }
 
   private applyWorkerRulesResult(rules: import('@tabular/rules').RulesEvalResult): void {

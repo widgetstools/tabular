@@ -19,7 +19,7 @@ export interface WorkerAggCol {
   weightField?: string;
 }
 
-interface GroupNode {
+export interface GroupNode {
   id: string;
   key: string;
   field: string;
@@ -80,7 +80,7 @@ export class GroupPass {
     const expanded = new Map<string, boolean>(opts.expandedState);
 
     const roots = this.buildTree(rowOf, ids, opts.groupCols, expanded, opts.groupDefaultExpanded);
-    this.aggregate(roots, rowOf, opts.aggCols);
+    this.aggregateRoots(roots, rowOf, opts.aggCols);
 
     const out = this.flatten(roots, opts);
     if (opts.grandTotalRow && roots.length) {
@@ -89,6 +89,30 @@ export class GroupPass {
       else out.push(grand);
     }
     return out;
+  }
+
+  /** Build group tree without aggregating or flattening (for PivotPass). */
+  buildTreeOnly(
+    store: RowStore,
+    ids: string[],
+    opts: Pick<GroupPassOptions, 'groupCols' | 'groupDefaultExpanded' | 'expandedState'>,
+    readRow?: (id: string) => Record<string, unknown>,
+  ): GroupNode[] {
+    const rowOf = readRow ?? ((id: string) => store.getRow(id)!);
+    const expanded = new Map<string, boolean>(opts.expandedState);
+    return this.buildTree(rowOf, ids, opts.groupCols, expanded, opts.groupDefaultExpanded);
+  }
+
+  aggregateRoots(
+    roots: GroupNode[],
+    rowOf: (id: string) => Record<string, unknown>,
+    aggCols: WorkerAggCol[],
+  ): void {
+    this.aggregate(roots, rowOf, aggCols);
+  }
+
+  flattenRoots(roots: GroupNode[], opts: GroupPassOptions): WorkerDisplayEntry[] {
+    return this.flatten(roots, opts);
   }
 
   private buildTree(
