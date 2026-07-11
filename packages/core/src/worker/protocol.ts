@@ -1,0 +1,270 @@
+/**
+ * Aggregation worker protocol (modeled on cgrid's kernel/worker/protocol.ts,
+ * scoped to realtime aggregation). The worker mirrors the row store and owns
+ * incremental per-group aggregation; the main thread patches the pushed
+ * results into live group rows without rebuilding the row model.
+ *
+ * Functions cannot cross the boundary, so only field-based agg columns with
+ * built-in agg functions participate. Columns with function `aggFunc`s or
+ * `valueGetter`s keep the main-thread path.
+ */
+
+export type ReqId = number;
+
+/** Built-in agg functions the worker can run incrementally. */
+export type WorkerAggFuncName =
+  | 'sum'
+  | 'min'
+  | 'max'
+  | 'avg'
+  | 'count'
+  | 'first'
+  | 'last'
+  | 'weightedAverage';
+
+export interface AggWorkerGroupCol {
+  colId: string;
+  field: string;
+}
+
+export interface AggWorkerAggCol {
+  colId: string;
+  field: string;
+  aggFunc: WorkerAggFuncName;
+  /** Weight field for weightedAverage (e.g. notional). */
+  weightField?: string;
+}
+
+export interface AggModel {
+  groupCols: AggWorkerGroupCol[];
+  aggCols: AggWorkerAggCol[];
+  /** Also maintain the grand-total record (id `grand-total`). */
+  grandTotal: boolean;
+}
+
+export interface AggTransactionPayload {
+  addIds?: string[];
+  add?: unknown[];
+  updateIds?: string[];
+  update?: unknown[];
+  removeIds?: string[];
+}
+
+/** @deprecated Standalone agg worker retired — use data-plane pushes. */
+export type AggWorkerRequest =
+  | { id: ReqId; type: 'setAggModel'; payload: AggModel }
+  | { id: ReqId; type: 'setRowData'; payload: { ids: string[]; rows: unknown[] } }
+  | { id: ReqId; type: 'applyTransaction'; payload: AggTransactionPayload };
+
+/** One changed group: `groupId` matches the main-thread `GroupNode.id`
+ *  (`g:{colId}:{path}`), or `grand-total`. `agg` is keyed by colId AND
+ *  field (the same aliasing `aggregateTree` writes). */
+export interface GroupAggUpdate {
+  groupId: string;
+  agg: Record<string, unknown>;
+}
+
+export type AggWorkerResponse =
+  | { id: ReqId; type: 'ok'; rowCount: number }
+  | { id: ReqId; type: 'error'; error: string };
+
+export type AggWorkerPush = {
+  type: 'aggregatesUpdated';
+  updates: GroupAggUpdate[];
+};
+
+// ── Data plane (W1–W6) ───────────────────────────────────────────────
+
+export interface WorkerFilterCol {
+  colId: string;
+  field: string;
+}
+
+export interface WorkerSortCol {
+  colId: string;
+  field: string;
+  type?: 'number' | 'text' | 'date';
+}
+
+export interface WorkerGroupCol {
+  colId: string;
+  field: string;
+}
+
+export interface WorkerAggColSpec {
+  colId: string;
+  field: string;
+  aggFunc: WorkerAggFuncName;
+  weightField?: string;
+}
+
+/** Virtual row field key for a materialized `calc` column on the worker. */
+export function workerCalcField(colId: string): string {
+  return `__calc:${colId}`;
+}
+
+export interface WorkerCalcCol {
+  colId: string;
+  source: string;
+  /** Overlay field written by CalcPass (defaults to workerCalcField(colId)). */
+  field: string;
+  /** Serialized aggregate pre-pass specs from compileCalc. */
+  prePass?: import('@tabular/calc').AggSpec[];
+  usesPrev?: boolean;
+}
+
+/** Pipeline configuration shipped on every model rebuild. */
+export interface WorkerPipelineConfig {
+  filterCols: WorkerFilterCol[];
+  sortCols: WorkerSortCol[];
+  /** Calc columns materialized before filter/sort/group (field-only deps). */
+  calcCols: WorkerCalcCol[];
+  filterModel: import('../types').FilterModel;
+  quickFilterTerms: string[];
+  sortModel: import('../types').SortModelItem[];
+  groupCols: WorkerGroupCol[];
+  aggCols: WorkerAggColSpec[];
+  groupDefaultExpanded: number;
+  /** Explicit expand/collapse overrides (group id → expanded). */
+  expandedState: Array<[string, boolean]>;
+  groupTotalRow?: 'top' | 'bottom';
+  groupSuppressBlankHeader?: boolean;
+  grandTotalRow?: 'top' | 'bottom';
+  suppressLeafRows?: boolean;
+}
+
+export interface WorkerDisplayEntry {
+  id: string;
+  kind: 'leaf' | 'group' | 'footer' | 'grandTotal';
+  level: number;
+  expanded: boolean;
+  key: string;
+  field: string;
+  childCount: number;
+  groupId: string | null;
+  aggData: Record<string, unknown>;
+}
+
+export interface WorkerModelOutput {
+  filteredCount: number;
+  filteredSortedIds: string[];
+  displayed: WorkerDisplayEntry[];
+}
+
+export type DataWorkerPush =
+  | {
+      type: 'modelUpdated';
+      output: WorkerModelOutput;
+      /** Worker-evaluated rules delta (Phase 4); materialize on main. */
+      rules?: import('@tabular/rules').RulesEvalResult;
+    }
+  | { type: 'aggregatesUpdated'; updates: GroupAggUpdate[] };
+
+// ── Viewport (W5) ────────────────────────────────────────────────────
+
+export interface ViewportRequest {
+  rowStart: number;
+  rowEnd: number;
+  columns: string[];
+}
+
+export interface ViewportChunk {
+  rowStart: number;
+  rowCount: number;
+  rowIds: string[];
+  rowKinds: Uint8Array;
+  levels: Uint8Array;
+  heights: Float32Array;
+  numericCols: Record<string, Float64Array>;
+  textCols: Record<string, { offsets: Uint32Array; bytes: Uint8Array }>;
+  groupValue?: string[];
+  groupChildCount?: Uint32Array;
+  isExpanded?: Uint8Array;
+  groupKey?: string[];
+}
+
+// ── Worker services (W6) ────────────────────────────────────────────
+
+export interface WorkerClipboardRange {
+  rowStart: number;
+  rowEnd: number;
+  colIds: string[];
+}
+
+export interface WorkerAutosizeColumn {
+  colId: string;
+  headerName: string;
+  font: string;
+  padding: number;
+  headerPadding?: number;
+  minWidth: number;
+  maxWidth: number;
+}
+
+export interface WorkerCsvColumn {
+  colId: string;
+  field?: string;
+  headerName?: string;
+}
+
+export interface WorkerCsvExportPayload {
+  columns: WorkerCsvColumn[];
+  columnKeys?: string[];
+  columnSeparator?: string;
+  skipColumnHeaders?: boolean;
+  suppressQuotes?: boolean;
+  withBOM?: boolean;
+  onlySelected?: boolean;
+  selectedIds?: string[];
+  skipRowGroups?: boolean;
+}
+
+export type DataWorkerRequest =
+  | { id: ReqId; type: 'setPipelineConfig'; payload: WorkerPipelineConfig }
+  | { id: ReqId; type: 'setRowData'; payload: { ids: string[]; rows: unknown[] } }
+  | { id: ReqId; type: 'applyTransaction'; payload: AggTransactionPayload }
+  | { id: ReqId; type: 'rebuildModel'; payload: Record<string, never> }
+  | {
+      id: ReqId;
+      type: 'setRulesConfig';
+      payload: import('./passes/rulesPass').WorkerRulesConfigPayload | null;
+    }
+  | { id: ReqId; type: 'getViewport'; payload: ViewportRequest }
+  | { id: ReqId; type: 'clipboardSerialize'; payload: { ranges: WorkerClipboardRange[]; delimiter?: string } }
+  | { id: ReqId; type: 'clipboardDeserialize'; payload: { text: string; delimiter?: string } }
+  | { id: ReqId; type: 'exportCsv'; payload: WorkerCsvExportPayload }
+  | { id: ReqId; type: 'exportXlsx'; payload: WorkerXlsxExportPayload }
+  | { id: ReqId; type: 'autosize'; payload: { columns: WorkerAutosizeColumn[]; skipHeader?: boolean; maxSampleSize?: number } };
+
+export interface WorkerXlsxExportPayload extends WorkerCsvExportPayload {
+  sheetName?: string;
+}
+
+export type DataWorkerResponse =
+  | { id: ReqId; type: 'ok' }
+  | { id: ReqId; type: 'error'; error: string }
+  | { id: ReqId; type: 'viewport'; chunk: ViewportChunk }
+  | { id: ReqId; type: 'clipboardSerializeResult'; tsv: string }
+  | { id: ReqId; type: 'clipboardDeserializeResult'; rows: string[][] }
+  | { id: ReqId; type: 'exportCsvResult'; bytes: Uint8Array }
+  | { id: ReqId; type: 'exportXlsxResult'; bytes: Uint8Array }
+  | { id: ReqId; type: 'autosizeResult'; widths: Record<string, number> };
+
+/** Agg func names the worker can run (built-ins only — functions can't
+ *  cross the boundary). */
+export const WORKER_AGG_FUNCS: ReadonlySet<string> = new Set([
+  'sum',
+  'min',
+  'max',
+  'avg',
+  'count',
+  'first',
+  'last',
+  'weightedAverage',
+]);
+
+/** Mirror of the main-thread `groupKey` (grouping.ts). */
+export function workerGroupKey(value: unknown): string {
+  if (value == null) return '(Blank)';
+  return String(value);
+}

@@ -73,7 +73,6 @@ import { decodeText } from './worker/chunkFormat';
 import {
   WORKER_AGG_FUNCS,
   workerCalcField,
-  type AggModel,
   type ViewportChunk,
   type WorkerAutosizeColumn,
   type WorkerClipboardRange,
@@ -191,13 +190,14 @@ export class Tabular<TData = unknown> {
   private readonly ctxPT: CanvasRenderingContext2D;
   private readonly ctxPB: CanvasRenderingContext2D;
 
-  // worker lifecycle (data plane + agg side-channel)
+  // worker lifecycle (data plane)
   private readonly workerCoord: WorkerCoordinator;
   /** Snapshot from a compare-mode main-thread run, awaiting worker output. */
   private workerCompareSnapshot: {
     filteredCount: number;
     displayedIds: string[];
   } | null = null;
+  private workerAggregationWarned = false;
   /** Cached viewport chunk from the data worker (W5). */
   private viewportChunk: ViewportChunk | null = null;
   private viewportPrefetchGen = 0;
@@ -388,6 +388,13 @@ export class Tabular<TData = unknown> {
       },
       restoreDataMirror: (rows) => grid.rows.restoreDataMirror(rows as TData[]),
       syncWorkerRulesConfig: (client) => grid.syncWorkerRulesConfig(client),
+      warnWorkerAggregationIgnored: () => {
+        if (grid.options.workerAggregation !== false || grid.workerAggregationWarned) return;
+        grid.workerAggregationWarned = true;
+        console.warn(
+          '[tabular] workerAggregation is deprecated and ignored when the data-plane worker is active; use rowDataMode: "main" to force main-thread aggregation',
+        );
+      },
     });
     if (options.pivotMode) this.cols.setPivotMode(true);
 
@@ -2379,12 +2386,6 @@ export class Tabular<TData = unknown> {
       this.workerCoord.syncDataPlane(workerConfig, ids, rows);
     } else {
       this.afterModelRefresh(repaint, headerHBefore);
-      const model = this.workerAggModel();
-      this.workerCoord.syncAggSideChannel(
-        model,
-        this.rows.filteredSortedRowIds as string[],
-        this.rows.filteredSortedRows as unknown[],
-      );
     }
   }
 
@@ -2413,50 +2414,15 @@ export class Tabular<TData = unknown> {
     else if (repaint) this.requestPaint();
   }
 
-  // ── worker aggregation (Tabular extension) ─────────────────────────
-
-  /**
-   * Worker-eligible aggregation model, or null when the worker path does
-   * not apply: option off, no grouping, tree data / pivot mode active, or
-   * any participating column needs main-thread code (valueGetter,
-   * function aggFunc, custom agg names). Default on (`!== false`).
-   */
-  private workerAggModel(): AggModel | null {
-    if (this.options.workerAggregation === false) return null;
-    if (typeof Worker === 'undefined') return null;
-    if (this.cols.pivotMode) return null;
-    if (this.options.treeData || this.options.getDataPath || this.options.treeDataChildrenField) {
-      return null;
-    }
-    const groupCols: AggModel['groupCols'] = [];
-    for (const c of this.cols.rowGroupColumns()) {
-      if (!c.def.field || c.def.valueGetter) return null;
-      groupCols.push({ colId: c.colId, field: c.def.field });
-    }
-    if (!groupCols.length) return null;
-    const aggCols: AggModel['aggCols'] = [];
-    for (const spec of this.cols.getAggCols()) {
-      const col = this.cols.getColumn(spec.colId);
-      if (!spec.field || typeof spec.aggFunc !== 'string' || col?.def.valueGetter) continue;
-      if (!WORKER_AGG_FUNCS.has(spec.aggFunc)) continue;
-      aggCols.push({
-        colId: spec.colId,
-        field: spec.field,
-        aggFunc: spec.aggFunc as AggModel['aggCols'][number]['aggFunc'],
-        weightField: spec.weightField,
-      });
-    }
-    if (!aggCols.length) return null;
-    return { groupCols, aggCols, grandTotal: this.options.grandTotalRow != null };
-  }
+  // ── live aggregation (main-thread fallback) ────────────────────────
 
   /**
    * Live group / pivot / grand-total aggregates after update-only ticks when
-   * the dedicated agg worker is not handling them (pivot, custom aggs, or
-   * `workerAggregation` off). Returns true when a full model refresh ran.
+   * the data-plane worker is not handling them. Returns true when a full
+   * model refresh ran.
    */
   private reaggregateLiveAfterUpdates(): boolean {
-    if (this.workerCoord.aggSideChannelActive || this.workerCoord.dataPlaneActive) return false;
+    if (this.workerCoord.dataPlaneActive) return false;
     const groupCols = this.cols.getRowGroupCols();
     if (!groupCols.length) return false;
     const pivotMode = this.cols.pivotMode;
@@ -6962,12 +6928,8 @@ export class Tabular<TData = unknown> {
     } else if (this.workerCoord.dataPlaneActive) {
       this.workerCoord.forwardTransaction(this.workerTransactionPayload(tx));
       this.requestPaint();
-    } else {
-      this.workerCoord.forwardAggTransaction({
-        updateIds: (tx.update ?? []).map((r) => this.rows.getId(r)),
-        update: (tx.update ?? []) as unknown[],
-      });
-      if (!this.reaggregateLiveAfterUpdates()) this.requestPaint();
+    } else if (!this.reaggregateLiveAfterUpdates()) {
+      this.requestPaint();
     }
   }
 
@@ -7015,12 +6977,8 @@ export class Tabular<TData = unknown> {
         this.workerCoord.forwardTransaction(this.workerTransactionPayload(tx));
       }
       this.requestPaint();
-    } else {
-      this.workerCoord.forwardAggTransaction({
-        updateIds: updated.map((r) => this.rows.getId(r)),
-        update: updated as unknown[],
-      });
-      if (!this.reaggregateLiveAfterUpdates()) this.requestPaint();
+    } else if (!this.reaggregateLiveAfterUpdates()) {
+      this.requestPaint();
     }
     this.emit('asyncTransactionsFlushed', {});
   }

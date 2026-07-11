@@ -1,11 +1,9 @@
 /**
- * Worker lifecycle coordinator — owns data-plane and agg side-channel clients
- * so the grid host stays paint/DOM focused.
+ * Worker lifecycle coordinator — owns the data-plane client so the grid host
+ * stays paint/DOM focused.
  */
-import { AggWorkerClient } from './client';
 import { DataWorkerClient } from './dataClient';
 import type {
-  AggModel,
   AggTransactionPayload,
   GroupAggUpdate,
   ViewportChunk,
@@ -30,12 +28,11 @@ export interface WorkerCoordinatorHost {
   readonly dataMirrorActive: boolean;
   restoreDataMirror(rows: unknown[]): void;
   syncWorkerRulesConfig(client: DataWorkerClient): Promise<void>;
+  /** Called once when deprecated workerAggregation=false with data plane active. */
+  warnWorkerAggregationIgnored?(): void;
 }
 
 export class WorkerCoordinator {
-  private aggWorker: AggWorkerClient | null = null;
-  private aggWorkerActive = false;
-
   private dataWorker: DataWorkerClient | null = null;
   private dataWorkerActive = false;
   private dataWorkerFallbackLogged = false;
@@ -49,10 +46,6 @@ export class WorkerCoordinator {
   /** Returns true if data plane is active. */
   get dataPlaneActive(): boolean {
     return this.dataWorkerActive;
-  }
-
-  get aggSideChannelActive(): boolean {
-    return this.aggWorkerActive;
   }
 
   get fallbackLogged(): boolean {
@@ -82,17 +75,8 @@ export class WorkerCoordinator {
     this.syncDataWorker(config, ids, rows);
   }
 
-  syncAggSideChannel(model: AggModel | null, ids: string[], rows: unknown[]): void {
-    this.syncAggWorker(model, ids, rows);
-  }
-
   forwardTransaction(tx: AggTransactionPayload): void {
     this.forwardTransactionToDataWorker(tx);
-  }
-
-  /** Stream update-only transaction to the agg side-channel. */
-  forwardAggTransaction(tx: AggTransactionPayload): void {
-    this.forwardUpdatesToAggWorker(tx);
   }
 
   requestViewport(req: ViewportRequest): Promise<ViewportChunk | null> {
@@ -101,49 +85,7 @@ export class WorkerCoordinator {
   }
 
   teardown(): void {
-    this.aggWorker?.destroy();
-    this.aggWorker = null;
-    this.aggWorkerActive = false;
     this.teardownDataWorker();
-  }
-
-  private syncAggWorker(model: AggModel | null, ids: string[], rows: unknown[]): void {
-    if (!model) {
-      this.aggWorkerActive = false;
-      return;
-    }
-    if (!this.aggWorker) {
-      try {
-        const worker = new Worker(new URL('./aggWorker.ts', import.meta.url), {
-          type: 'module',
-        });
-        this.aggWorker = new AggWorkerClient(worker, (updates) => {
-          if (this.host.destroyed || !this.aggWorkerActive) return;
-          const aggChanges = this.host.patchGroupAggregates(updates);
-          if (aggChanges.length) {
-            if (this.host.enableCellFlash) {
-              for (const c of aggChanges) this.host.flashCellChange(c);
-            }
-            this.host.updateStatusBar();
-            this.host.requestPaint();
-          }
-        });
-      } catch {
-        // Worker construction can fail in non-bundled / test environments —
-        // aggregation silently stays on the main thread.
-        this.aggWorkerActive = false;
-        return;
-      }
-    }
-    this.aggWorkerActive = true;
-    void this.aggWorker.setAggModel(model);
-    void this.aggWorker.setRowData(ids, rows);
-  }
-
-  /** Stream an update-only transaction to the aggregation worker. */
-  private forwardUpdatesToAggWorker(tx: AggTransactionPayload): void {
-    if (!this.aggWorkerActive || !this.aggWorker || !tx.update?.length) return;
-    void this.aggWorker.applyTransaction(tx);
   }
 
   private ensureDataWorker(): DataWorkerClient | null {
@@ -152,11 +94,25 @@ export class WorkerCoordinator {
       const worker = new Worker(new URL('./dataWorker.ts', import.meta.url), {
         type: 'module',
       });
-      this.dataWorker = new DataWorkerClient(worker, (output, rules) => {
-        if (this.host.destroyed || !this.dataWorkerActive) return;
-        this.host.applyWorkerModel(output);
-        if (rules) this.host.onRulesResult?.(rules);
-      });
+      this.dataWorker = new DataWorkerClient(
+        worker,
+        (output, rules) => {
+          if (this.host.destroyed || !this.dataWorkerActive) return;
+          this.host.applyWorkerModel(output);
+          if (rules) this.host.onRulesResult?.(rules);
+        },
+        (updates) => {
+          if (this.host.destroyed || !this.dataWorkerActive) return;
+          const aggChanges = this.host.patchGroupAggregates(updates);
+          if (aggChanges.length) {
+            if (this.host.enableCellFlash) {
+              for (const c of aggChanges) this.host.flashCellChange(c);
+            }
+            this.host.updateStatusBar();
+            this.host.requestPaint();
+          }
+        },
+      );
       return this.dataWorker;
     } catch {
       this.fallbackDataWorker('worker construction failed');
@@ -168,7 +124,7 @@ export class WorkerCoordinator {
     const client = this.ensureDataWorker();
     if (!client) return;
     this.dataWorkerActive = true;
-    this.aggWorkerActive = false;
+    this.host.warnWorkerAggregationIgnored?.();
 
     const configOnly = this.workerMirrorSynced && this.host.dataMirrorActive;
 

@@ -210,6 +210,83 @@ function compareDisplayedAgg(
   return local;
 }
 
+function assertIncrementalApplyAndResolveParity(
+  pipeline: DataPipeline,
+  allIds: string[],
+  config: WorkerPipelineConfig,
+  rnd: () => number,
+): number {
+  let local = 0;
+  pipeline.setConfig(config);
+  pipeline.rebuild();
+
+  for (let i = 0; i < 200; i++) {
+    const n = 1 + Math.floor(rnd() * 20);
+    const updateIds: string[] = [];
+    const update: BondRow[] = [];
+    for (let j = 0; j < n; j++) {
+      const id = allIds[Math.floor(rnd() * allIds.length)]!;
+      const row = { ...(pipeline.getRow(id) as BondRow) };
+      row.pnl = row.pnl + (rnd() < 0.5 ? -1 : 1) * 10;
+      row.spread = Math.max(1, row.spread + (rnd() < 0.5 ? -1 : 1));
+      row.notional = Math.max(1, row.notional + (rnd() < 0.5 ? -1 : 1) * Math.floor(rnd() * 10_000));
+      updateIds.push(id);
+      update.push(row);
+    }
+    const payload = { updateIds, update };
+    const result = pipeline.applyAndResolve(payload);
+    if (result.kind !== 'aggregates') {
+      local++;
+      console.error(`incremental batch ${i}: expected aggregates path, got ${result.kind}`);
+      continue;
+    }
+    const full = pipeline.rebuild();
+    const refByGroup = new Map<string, Record<string, unknown>>();
+    for (const d of full.displayed) {
+      if (d.kind === 'footer') {
+        refByGroup.set(d.id.slice(0, -':footer'.length), d.aggData);
+      } else if (d.kind === 'group' && Object.keys(d.aggData).length) {
+        refByGroup.set(d.id, d.aggData);
+      } else if (d.kind === 'grandTotal') {
+        refByGroup.set('grand-total', d.aggData);
+      }
+    }
+    for (const u of result.updates) {
+      const ref = refByGroup.get(u.groupId);
+      if (!ref) {
+        local++;
+        console.error(`incremental batch ${i}: missing group ${u.groupId} in full rebuild`);
+        continue;
+      }
+      local += compareAggData(u.agg, ref, `incremental batch ${i} ${u.groupId}`);
+    }
+  }
+  return local;
+}
+
+function incrementalAggConfig(): WorkerPipelineConfig {
+  return {
+    filterCols: [],
+    sortCols: [],
+    calcCols: [],
+    filterModel: {},
+    quickFilterTerms: [],
+    sortModel: [],
+    groupCols: [
+      { colId: 'desk', field: 'desk' },
+      { colId: 'sector', field: 'sector' },
+    ],
+    aggCols: [
+      { colId: 'notional', field: 'notional', aggFunc: 'sum' },
+      { colId: 'pnl', field: 'pnl', aggFunc: 'sum' },
+      { colId: 'spread', field: 'spread', aggFunc: 'max' },
+    ],
+    groupDefaultExpanded: -1,
+    expandedState: [],
+    grandTotalRow: 'bottom',
+  };
+}
+
 function assertAggParityAfterUpdates(
   pipeline: DataPipeline,
   store: RowStore,
@@ -356,6 +433,20 @@ for (let seed = 1; seed <= 3; seed++) {
   }
 }
 
+// Incremental applyAndResolve vs full rebuild (200 update-only batches)
+{
+  const { ids, rows } = seedRows(800);
+  const rowRecords = rows as unknown as Record<string, unknown>[];
+  const pipeline = new DataPipeline();
+  pipeline.setRowData(ids, rowRecords.map((r) => ({ ...r })));
+  mismatches += assertIncrementalApplyAndResolveParity(
+    pipeline,
+    ids,
+    incrementalAggConfig(),
+    mulberry32(99),
+  );
+}
+
 // PREV store smoke test
 {
   const prev = new PrevStore();
@@ -373,6 +464,6 @@ if (mismatches > 0) {
 }
 
 console.log(
-  `OK: ${TX_COUNT} randomized transactions × 3 seeds + 500 update-only agg batches — DataPipeline parity (calc+agg+PREV)`,
+  `OK: ${TX_COUNT} randomized transactions × 3 seeds + 500 update-only agg batches + 200 incremental applyAndResolve batches — DataPipeline parity (calc+agg+PREV)`,
 );
 process.exit(0);

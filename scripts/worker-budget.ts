@@ -64,7 +64,7 @@ function mulberry32(a: number): () => number {
 function pipelineConfig(): WorkerPipelineConfig {
   return {
     filterCols: [{ colId: 'desk', field: 'desk' }],
-    sortCols: [{ colId: 'spread', field: 'spread', type: 'number' }],
+    sortCols: [],
     calcCols: [],
     filterModel: {} as FilterModel,
     quickFilterTerms: [],
@@ -137,7 +137,7 @@ function applyUpdateBatch(
   ids: string[],
   rnd: () => number,
   count: number,
-): void {
+): Array<{ groupId: string; agg: Record<string, unknown> }> {
   const updateIds: string[] = [];
   const update: BondRow[] = [];
   for (let i = 0; i < count; i++) {
@@ -151,7 +151,9 @@ function applyUpdateBatch(
     updateIds.push(id);
     update.push(row);
   }
-  pipeline.applyTransaction({ updateIds, update });
+  const result = pipeline.applyAndResolve({ updateIds, update });
+  if (result.kind === 'aggregates') return result.updates;
+  return extractGroupUpdates(result.output.displayed, new Map());
 }
 
 const rnd = mulberry32(42);
@@ -166,16 +168,13 @@ let out = pipeline.rebuild();
 const aggMap = seedAggMap(out.displayed);
 
 // Warm-up: one full tick batch outside the measured loop.
-applyUpdateBatch(pipeline, ids, rnd, UPDATES_PER_ITER);
-out = pipeline.rebuild();
-applyMainPatches(aggMap, extractGroupUpdates(out.displayed, aggMap));
+const warmUpdates = applyUpdateBatch(pipeline, ids, rnd, UPDATES_PER_ITER);
+applyMainPatches(aggMap, warmUpdates);
 
 const samples: number[] = [];
 
 for (let i = 0; i < ITERATIONS; i++) {
-  applyUpdateBatch(pipeline, ids, rnd, UPDATES_PER_ITER);
-  out = pipeline.rebuild();
-  const updates = extractGroupUpdates(out.displayed, aggMap);
+  const updates = applyUpdateBatch(pipeline, ids, rnd, UPDATES_PER_ITER);
 
   const t0 = performance.now();
   applyMainPatches(aggMap, updates);
