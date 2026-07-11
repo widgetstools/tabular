@@ -3,6 +3,8 @@
 html, body, #root {
   margin: 0;
   height: 100%;
+  /* The app shell owns all scrolling (sidebar + page scroll independently). */
+  overflow: hidden;
 }
 
 /* Cursor Dark chrome defaults */
@@ -32,6 +34,9 @@ body.light {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 body.light .sidebar {
@@ -94,8 +99,11 @@ body.light .nav-item.active {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   padding: 18px 20px 20px;
   gap: 12px;
+  /* Pages taller than the viewport scroll themselves, never the window. */
+  overflow-y: auto;
 }
 
 .page-head h2 {
