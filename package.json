@@ -14,6 +14,7 @@
     "typecheck": "tsc -p packages/expression && tsc -p packages/calc && tsc -p packages/rules && tsc -p packages/format && tsc -p packages/renderers && tsc -p packages/edit && tsc -p packages/ext && tsc -p packages/core && tsc -p packages/react && tsc -p apps/showcase && tsc -p apps/blotter && tsc -p apps/agref",
     "worker-compare": "npx tsx scripts/worker-compare.ts",
     "worker-budget": "npx tsx scripts/worker-budget.ts",
+    "test:worker": "npm run worker-compare && npm run worker-budget",
     "rules-stress": "npx tsx scripts/rules-stress.ts"
   },
   "devDependencies": {
