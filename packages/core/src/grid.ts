@@ -2471,7 +2471,7 @@ export class Tabular<TData = unknown> {
 
   /**
    * Worker-eligible pipeline config, or null when the worker path does not
-   * apply: forced main, pivot/tree/external-filter active, or an *active*
+   * apply: forced main, tree/external-filter active, or an *active*
    * sort/filter/group/agg/calc needs main-thread code (valueGetter,
    * comparator, function aggFunc, PREV/aggregate calc scopes).
    * Displayed columns with JS getters are skipped for the field maps rather
@@ -2610,6 +2610,15 @@ export class Tabular<TData = unknown> {
     };
   }
 
+  /** Same predicate as main-thread refresh and worker pipeline pivot branch. */
+  private isWorkerPivotActive(): boolean {
+    return (
+      this.cols.pivotMode &&
+      this.cols.getPivotCols().length > 0 &&
+      this.cols.getValueCols().length > 0
+    );
+  }
+
   private workerOwnsRowDataActive(): boolean {
     if (!this.workerCoord.dataPlaneActive) return false;
     if (this.options.workerCompareMode === true) return false;
@@ -2625,6 +2634,8 @@ export class Tabular<TData = unknown> {
     this.viewportChunk = null;
     if (output.pivotKeyPaths !== undefined) {
       this.applyPivotResultColumnsFromPaths(output.pivotKeyPaths);
+    } else if (!this.isWorkerPivotActive()) {
+      this.cols.clearPivotResultColumns();
     }
     this.rows.applyWorkerModel(output);
     if (this.workerOwnsRowDataActive()) {
