@@ -281,8 +281,9 @@ degrade gracefully, log once in dev.
 - Every stage keeps `refreshModel()` as the fallback; a worker error tears the
   worker down and reverts to main-thread mode without data loss (rows of
   record remain the caller's objects until W5).
-- Pivot and tree data stay main-thread until a dedicated follow-up; the seam
-  is the same flatten-output contract, so they are ports, not redesigns.
+- Pivot runs on the data-plane worker when eligible; tree data stays
+  main-thread until a dedicated follow-up. The seam is the same flatten-output
+  contract, so remaining ports are not redesigns.
 
 **Exit criteria (unification):**
 - [ ] Single worker module; no aggWorker.ts

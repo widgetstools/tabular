@@ -2344,6 +2344,10 @@ export class Tabular<TData = unknown> {
     const useWorker = this.options.rowDataMode !== 'main' && workerConfig != null;
     const compare = useWorker && this.options.workerCompareMode === true;
 
+    if (!useWorker && this.workerCoord.dataPlaneActive) {
+      this.workerCoord.teardown();
+    }
+
     // Only warn when the caller explicitly asked for the worker and we cannot
     // honour it (pivot/tree/callbacks). Default worker-first falls back quietly.
     if (
