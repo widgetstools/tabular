@@ -3,23 +3,28 @@
 ## Authority
 1. When `dataWorkerActive`, the worker RowStore is authoritative for row
    field values after the last acknowledged transaction.
-2. Main may keep a mirror only when `workerOwnsRowData === false` or
-   compare mode is on.
+2. Main **keeps** a full row mirror by default (API, rules, paint fallback).
+   Mirror may be dropped only when `workerOwnsRowData === true` (Extreme /
+   memory mode) after a warm viewport chunk. Compare mode always keeps the
+   mirror.
 3. Displayed model (`displayed` ids + kinds + aggData) comes from the
    worker `modelUpdated` push, except during incremental agg patch
    windows (aggregatesUpdated) which mutate aggData only.
+4. Paint prefers the current `viewportChunk` when it covers a cell; otherwise
+   falls back to the main mirror. Never clear the chunk on tick/dataOnly
+   updates — replace atomically on prefetch, or clear only when the displayed
+   id list changes.
 
 ## Transaction ordering
-4. Main must not apply a second tx to the worker until the previous
-   applyTransaction reply has resolved OR the protocol documents
-   unordered fire-and-forget with sequence numbers (pick one; prefer
-   await-reply for structural, fire-and-forget for update-only with seq).
+5. Update-only ticks are fire-and-forget (coalesced). Structural
+   setPipelineConfig + rebuildModel are serialised ahead of tick flushes so
+   expand/collapse is not starved. Prefer await-reply for structural ops.
 
 ## Fallback
-5. Construction failure / worker `error` push → `fallbackDataWorker`:
+6. Construction failure / worker `error` push → `fallbackDataWorker`:
    restore mirror from `workerSeedRows` if needed, `rowDataMode='main'`,
    `refreshModel()`.
-6. Ineligibility is evaluated in `workerDataPlaneConfig()`; default
+7. Ineligibility is evaluated in `workerDataPlaneConfig()`; default
    omitted `rowDataMode` means try worker (`!== 'main'`).
 
 ## Eligibility matrix (target after Phase E/F)
@@ -36,5 +41,5 @@
 | Custom function aggFunc | full plane fallback | yes |
 
 ## Dual-worker retirement
-7. After Phase C, `workerAggregation` is ignored (warn once if set).
-8. Incremental aggregation is an internal pipeline mode, not a second Worker.
+8. After Phase C, `workerAggregation` is ignored (warn once if set).
+9. Incremental aggregation is an internal pipeline mode, not a second Worker.
