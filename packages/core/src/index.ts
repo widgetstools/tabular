@@ -121,3 +121,16 @@ export type {
   GetDetailRowDataParams,
   IsRowMaster,
 } from './types';
+// Internal building blocks re-exported for alternate renderers (@tabular/dom).
+// The canvas Tabular remains the primary API; these are the compute layer.
+export { RowModel } from './rowModel';
+export type { CellChange, GroupRefreshOptions } from './rowModel';
+export { ColumnModel } from './columnModel';
+export type { InternalColumn, Region } from './columnModel';
+export { WorkerCoordinator } from './worker/coordinator';
+export type { WorkerCoordinatorHost } from './worker/coordinator';
+export type {
+  WorkerPipelineConfig,
+  WorkerModelOutput,
+  GroupAggUpdate,
+} from './worker/protocol';
