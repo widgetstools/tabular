@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>tabular — FI blotter</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header id="toolbar">
+      <div class="brand"><span>tabular</span> · fixed-income blotter</div>
+      <div class="spacer"></div>
+      <label>Ticks/s
+        <select id="rate">
+          <option value="1000">1,000</option>
+          <option value="4000" selected>4,000</option>
+          <option value="10000">10,000</option>
+        </select>
+      </label>
+      <button id="pause">Pause</button>
+      <button id="density">Density: compact</button>
+      <button id="theme">Theme: Cursor Dark</button>
+      <button id="export">Export CSV</button>
+    </header>
+    <div id="grid"></div>
+    <footer id="statusbar">
+      <span id="counts"></span>
+      <span id="selection"></span>
+      <div class="spacer"></div>
+      <span id="aggregates"></span>
+    </footer>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

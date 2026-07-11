@@ -1,0 +1,237 @@
+* { box-sizing: border-box; }
+
+/* Force classic (always-visible) scrollbars so macOS overlay scrollbars
+   don't hide the grid's scroll affordances — matches AG docs screenshots. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background-color: rgba(168, 168, 168, 0.35);
+  border: 2px solid transparent;
+  border-radius: 5px;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: rgba(168, 168, 168, 0.6); }
+
+body.light ::-webkit-scrollbar-thumb { background-color: rgba(110, 110, 110, 0.35); }
+body.light ::-webkit-scrollbar-thumb:hover { background-color: rgba(110, 110, 110, 0.6); }
+
+html, body, #root {
+  margin: 0;
+  height: 100%;
+}
+
+/* Cursor Dark chrome defaults */
+body {
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  background: #141414;
+  color: #F0F0F0;
+  font-size: 13px;
+}
+
+body.light {
+  background: #F3F3F3;
+  color: #141414;
+}
+
+.app {
+  display: flex;
+  height: 100%;
+}
+
+.sidebar {
+  width: 216px;
+  flex-shrink: 0;
+  background: #141414;
+  border-right: 1px solid #2A2A2A;
+  padding: 16px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+body.light .sidebar {
+  background: #F3F3F3;
+  border-right-color: #E5E5E5;
+}
+
+.sidebar h1 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 8px 4px;
+  letter-spacing: 0.02em;
+}
+
+.sidebar h1 span { color: #81A1C1; }
+
+body.light .sidebar h1 span { color: #3C7CAB; }
+
+.sidebar .tagline {
+  font-size: 11px;
+  color: #6B6B6B;
+  margin: 0 8px 16px;
+}
+
+body.light .sidebar .tagline { color: #8E8E8E; }
+
+.nav-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 2px;
+  color: #A8A8A8;
+  font: inherit;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
+body.light .nav-item { color: #6E6E6E; }
+
+.nav-item:hover { background: #262626; color: #F0F0F0; }
+
+body.light .nav-item:hover { background: #EDEDED; color: #141414; }
+
+.nav-item.active {
+  background: #262626;
+  color: #F0F0F0;
+  box-shadow: inset 2px 0 0 #81A1C1;
+}
+
+body.light .nav-item.active {
+  background: #EDEDED;
+  color: #141414;
+  box-shadow: inset 2px 0 0 #3C7CAB;
+}
+
+.page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 18px 20px 20px;
+  gap: 12px;
+}
+
+.page-head h2 {
+  margin: 0 0 4px;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.page-head p {
+  margin: 0;
+  color: #A8A8A8;
+  max-width: 860px;
+  line-height: 1.5;
+}
+
+body.light .page-head p { color: #6E6E6E; }
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.controls label {
+  color: #A8A8A8;
+  font-size: 12px;
+}
+
+body.light .controls label { color: #6E6E6E; }
+
+.controls input[type='text'],
+.controls input[type='number'],
+.controls select {
+  background: #181818;
+  border: 1px solid #353535;
+  border-radius: 2px;
+  color: #F0F0F0;
+  font: inherit;
+  padding: 6px 8px;
+  outline: none;
+}
+
+body.light .controls input[type='text'],
+body.light .controls input[type='number'],
+body.light .controls select {
+  background: #FCFCFC;
+  border-color: #D4D4D4;
+  color: #141414;
+}
+
+.controls input:focus, .controls select:focus { border-color: #81A1C1; }
+
+body.light .controls input:focus,
+body.light .controls select:focus { border-color: #3C7CAB; }
+
+.controls button {
+  background: #181818;
+  border: 1px solid #353535;
+  border-radius: 2px;
+  color: #F0F0F0;
+  font: inherit;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+body.light .controls button {
+  background: #FCFCFC;
+  border-color: #D4D4D4;
+  color: #141414;
+}
+
+.controls button:hover { border-color: #81A1C1; }
+
+body.light .controls button:hover { border-color: #3C7CAB; }
+
+.controls button.on { border-color: #81A1C1; color: #81A1C1; }
+
+body.light .controls button.on { border-color: #3C7CAB; color: #3C7CAB; }
+
+.grid-wrap {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid #353535;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+body.light .grid-wrap { border-color: #D4D4D4; }
+
+.status {
+  display: flex;
+  gap: 18px;
+  color: #A8A8A8;
+  font-size: 12px;
+  min-height: 18px;
+}
+
+body.light .status { color: #6E6E6E; }
+
+.status b {
+  color: #F0F0F0;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-weight: 500;
+}
+
+body.light .status b { color: #141414; }
+
+.kbd {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+  background: #181818;
+  border: 1px solid #353535;
+  border-radius: 2px;
+  padding: 1px 5px;
+  color: #A8A8A8;
+}
+
+body.light .kbd {
+  background: #FCFCFC;
+  border-color: #D4D4D4;
+  color: #6E6E6E;
+}
