@@ -966,12 +966,12 @@ export interface GridOptions<TData = unknown> {
    */
   workerAggregation?: boolean;
   /**
-   * Tabular extension: where the row pipeline runs. `'worker'` (default)
-   * offloads filter/sort/group/calc to the data worker when eligible;
-   * `'main'` keeps the CSRM on the UI thread. Pivot, tree data, external
-   * filters, and active sort/filter on JS `valueGetter`/`comparator`
-   * columns fall back to main. Set `rowDataMode: 'main'` to force the
-   * UI-thread path.
+   * Tabular extension: where the row pipeline runs. Default `'worker'`
+   * offloads filter/sort/group/calc to the data worker when eligible.
+   * `'main'` forces the CSRM on the UI thread (debug, ineligible features,
+   * or environments without Worker). Pivot, tree data, external filters,
+   * and active sort/filter on JS `valueGetter`/`comparator` columns fall
+   * back to main automatically.
    */
   rowDataMode?: 'main' | 'worker';
   /**

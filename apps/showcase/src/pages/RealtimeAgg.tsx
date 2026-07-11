@@ -83,12 +83,13 @@ export function RealtimeAggPage() {
   return (
     <main className="page">
       <div className="page-head">
-        <h2>Realtime aggregation (Web Worker)</h2>
+        <h2>Realtime aggregation</h2>
         <p>
           {ROWS.toLocaleString()} positions grouped desk → sector with live sum / weighted-avg /
-          max / avg rollups. The data-plane worker mirrors the row set and maintains per-group
-          accumulators incrementally — each tick batch costs O(changed rows) and the main thread
-          only patches the changed group aggregates. Collapse the groups and watch the totals move.
+          max / avg rollups. The worker data plane is the default; append <code>?main=1</code> to
+          force the UI thread. Incremental accumulators run in the worker — each tick batch costs
+          O(changed rows) and the main thread only patches changed group aggregates. Collapse the
+          groups and watch the totals move.
         </p>
       </div>
       <div className="controls">

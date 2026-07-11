@@ -53,17 +53,11 @@ export function GroupingPage() {
           Group by desk → sector with an auto group column (▸/▾). Aggregations: sum on notional /
           PnL / DV01, weighted-average spread and yield by notional. Group total rows and a grand
           total appear at the bottom of each expanded group. Sticky group headers keep the current
-          group label visible while scrolling within it. Uses the worker data plane by default
+          group label visible while scrolling within it. The worker data plane is the default;
+          append <code>?main=1</code> to force the UI thread
           {compareMode && !mainMode ? (
             <>
-              {' '}
-              (<b>compare mode</b> via <code>?compare=1</code>)
-            </>
-          ) : null}
-          {mainMode ? (
-            <>
-              {' '}
-              — forced <b>main thread</b> via <code>?main=1</code>
+              , or <code>?compare=1</code> for differential checks
             </>
           ) : null}
           .

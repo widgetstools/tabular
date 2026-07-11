@@ -226,8 +226,9 @@ and multi-column ranges; RealtimeAgg budget unaffected.
 ## 3. Phase 2 — The worker data plane (the structural investment)
 
 The single most important adoption, executed as a **strangler** on the existing
-`worker/` seam so the main-thread CSRM keeps working throughout and remains the
-default until the worker path is proven.
+`worker/` seam. The worker data plane is now the default; the main-thread CSRM
+remains the fallback for ineligible features, debug, and environments without
+Worker support.
 
 Authoritative invariants: `docs/superpowers/specs/2026-07-10-worker-invariants.md`
 (worker unification plan: `docs/superpowers/plans/2026-07-10-worker-data-plane-unification.md`).
@@ -266,7 +267,7 @@ each stage independently shippable and verified by differential testing
 
 ```ts
 rowDataMode?: 'main' | 'worker'   // Tabular extension; default 'worker' (falls back to main when ineligible).
-// workerAggregation defaults true; implied/superseded by the data-plane worker when active.
+// workerAggregation is deprecated; ignored when set.
 ```
 
 Eligibility rules (no pivot/tree in W2–W4 initially; JS callbacks force
@@ -283,9 +284,12 @@ degrade gracefully, log once in dev.
 - Pivot and tree data stay main-thread until a dedicated follow-up; the seam
   is the same flatten-output contract, so they are ports, not redesigns.
 
-**Exit criteria:** Extreme page runs with `rowDataMode: 'worker'` at budget;
-differential suite green across 10k randomized transaction sequences;
-RealtimeAgg sustains 200k updates/s with main thread ≤ 4ms scripting.
+**Exit criteria (unification):**
+- [ ] Single worker module; no aggWorker.ts
+- [ ] Extreme default worker at budget
+- [ ] worker-compare green (incl. pivot + update-only aggs)
+- [ ] RealtimeAgg on data plane with incremental fast-path; main ≤ 4ms p95 scripting
+- [ ] Pivot live ticks do not call main reaggregateLive when worker active
 
 ---
 

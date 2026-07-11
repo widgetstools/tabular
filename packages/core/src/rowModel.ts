@@ -252,6 +252,11 @@ export class RowModel<TData = unknown> {
   }
 
   /**
+   * Fallback-only: main-thread CSRM path when the data worker is inactive
+   * or ineligible. When the worker is active, incremental aggregates and
+   * pivot rebuilds are handled on the data plane — do not call from grid
+   * tick handlers in that mode.
+   *
    * Recompute group / pivot / grand-total aggregates after update-only
    * transactions without rebuilding the display tree. Syncs stale leaf
    * object refs first (transactions patch `byId` but not `leafRows`).

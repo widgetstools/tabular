@@ -91,6 +91,7 @@ export function RulesPage() {
           <code>transactionApplied</code> delta feed — paint reads precomputed styles, never
           re-evaluates expressions. Delta refs <code>[field.old]</code> / <code>[field.new]</code>{' '}
           drive relative-change rules; alerts are debounced per rule and globally token-bucketed.
+          The worker data plane is the default; append <code>?main=1</code> to force the UI thread.
         </p>
       </div>
       <div className="controls">

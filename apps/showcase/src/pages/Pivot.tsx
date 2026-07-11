@@ -107,7 +107,8 @@ export function PivotPage() {
           Olympic dataset aligned with AG Grid pivot docs. Use <b>4 — Nested (sport + year)</b> to
           reproduce collapsible, multi-level pivot column headers (click group labels or the
           chevrons). Single-pivot sport mode matches AG: groups are not collapsible. Turn on{' '}
-          <b>Live ticks</b> to watch pivot cells and group totals update in real time.
+          <b>Live ticks</b> to watch pivot cells and group totals update in real time. The worker
+          data plane is the default; append <code>?main=1</code> to force the UI thread.
         </p>
       </div>
       <div className="controls">
