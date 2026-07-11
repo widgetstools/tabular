@@ -257,7 +257,7 @@ function pipelineConfig(filterModel: FilterModel, sortModel: SortModelItem[]): W
     sortModel,
     groupCols: [{ colId: 'desk', field: 'desk' }],
     aggCols: [{ colId: 'notional', field: 'notional', aggFunc: 'sum' }],
-    groupDefaultExpanded: 0,
+    groupDefaultExpanded: 1,
     expandedState: [],
     groupTotalRow: 'bottom',
     grandTotalRow: 'bottom',
