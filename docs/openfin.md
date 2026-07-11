@@ -59,6 +59,30 @@ The core engine is tuned for CPU-constrained rendering out of the box:
   re-renders crisply when the window moves between monitors with different
   scale factors (multi-monitor trading desks).
 
+## Running the showcase in OpenFin
+
+```bash
+npm run dev:showcase       # vite on :5173 (serves the manifest too)
+npm run openfin:showcase   # launches the OpenFin window via @openfin/node-adapter
+```
+
+The manifest lives at `apps/showcase/public/openfin/app.json` (served as
+`http://localhost:5173/openfin/app.json`) and pins a runtime version. Pin one
+that exists under `~/Openfin/Runtime/` — on Apple Silicon it must be an arm64
+build (`file .../OpenFin.app/Contents/MacOS/OpenFin`); an x86_64 runtime dies
+silently at spawn (the RVM logs `PID: 0xFFFFFFFF`).
+
+The runtime exposes DevTools on port 9092 (`devtools_port` +
+`--remote-debugging-port` in the manifest): open `chrome://inspect`, add
+`localhost:9092`, or hit `http://localhost:9092/json/list` directly.
+
+**Gotcha — launching from inside an editor/agent terminal:** VS Code/Cursor
+extension hosts export `ELECTRON_RUN_AS_NODE=1`. If that leaks into the
+launcher's environment, the OpenFin runtime (an Electron binary) starts as
+plain Node, prints `bad option: --startup-url=…`, and exits instantly — the
+RVM still reports the app as "successfully loaded". Launch with
+`env -u ELECTRON_RUN_AS_NODE npm run openfin:showcase` from such terminals.
+
 ## App-side configuration
 
 ### Detect software rendering and cap the pixel budget

@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "dev:showcase": "npm run dev -w apps/showcase",
+    "openfin:showcase": "npm run openfin -w apps/showcase",
     "dev:blotter": "npm run dev -w apps/blotter",
     "dev:agref": "npm run dev -w apps/agref",
     "build": "npm run typecheck && npm run build -w apps/showcase && npm run build -w apps/blotter",
