@@ -86,7 +86,7 @@ function referenceDisplayed(
 
   calcPass.setAggResolver(
     AggScopeResolver.forPhase(
-      calcCols.flatMap((c) => c.prePass ?? []),
+      config.calcCols.flatMap((c) => c.prePass ?? []),
       allIds,
       allIds,
       readRaw,
@@ -103,7 +103,7 @@ function referenceDisplayed(
 
   calcPass.setAggResolver(
     AggScopeResolver.forPhase(
-      calcCols.flatMap((c) => c.prePass ?? []),
+      config.calcCols.flatMap((c) => c.prePass ?? []),
       allIds,
       ids,
       readFilter,
@@ -118,7 +118,7 @@ function referenceDisplayed(
   const groupIndex = buildGroupRowIndex(ids, config.groupCols, readSort);
   calcPass.setAggResolver(
     AggScopeResolver.forPhase(
-      calcCols.flatMap((c) => c.prePass ?? []),
+      config.calcCols.flatMap((c) => c.prePass ?? []),
       allIds,
       ids,
       readSort,
@@ -136,6 +136,8 @@ function referenceDisplayed(
       aggCols: config.aggCols,
       groupDefaultExpanded: config.groupDefaultExpanded,
       expandedState: config.expandedState,
+      groupTotalRow: config.groupTotalRow,
+      grandTotalRow: config.grandTotalRow,
     },
     readGroup,
   );
@@ -225,6 +227,7 @@ function assertAggParityAfterUpdates(
       const row = { ...(store.getRow(id) as BondRow) };
       row.pnl = row.pnl + (rnd() < 0.5 ? -1 : 1) * 10;
       row.spread = Math.max(1, row.spread + (rnd() < 0.5 ? -1 : 1));
+      row.notional = Math.max(1, row.notional + (rnd() < 0.5 ? -1 : 1) * Math.floor(rnd() * 10_000));
       updateIds.push(id);
       update.push(row);
     }
@@ -256,6 +259,8 @@ function pipelineConfig(filterModel: FilterModel, sortModel: SortModelItem[]): W
     aggCols: [{ colId: 'notional', field: 'notional', aggFunc: 'sum' }],
     groupDefaultExpanded: 0,
     expandedState: [],
+    groupTotalRow: 'bottom',
+    grandTotalRow: 'bottom',
   };
 }
 
