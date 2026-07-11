@@ -30,6 +30,7 @@ import { PivotPage } from './pages/Pivot';
 import { ThemingPage } from './pages/Theming';
 import { ExtShellPage } from './pages/ExtShell';
 import { EditOpsPage } from './pages/EditOps';
+import { DomVsCanvasPage } from './pages/DomVsCanvas';
 
 const PAGES = [
   { id: 'rules', label: 'Rules & alerts', component: RulesPage },
@@ -63,6 +64,7 @@ const PAGES = [
   { id: 'range', label: 'Range selection', component: RangeSelectionPage },
   { id: 'statusbar', label: 'Status bar & overlays', component: StatusOverlaysPage },
   { id: 'theming', label: 'Theming & density', component: ThemingPage },
+  { id: 'domvs', label: 'DOM vs Canvas', component: DomVsCanvasPage },
 ] as const;
 
 export function App() {
