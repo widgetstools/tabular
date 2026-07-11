@@ -1,0 +1,49 @@
+---
+description: Mandatory AG Grid documentation research before implementing or verifying any grid feature
+alwaysApply: true
+---
+
+# AG Grid feature research — required before implementation
+
+This repo builds Tabular (`packages/core`), a canvas-first grid whose features,
+API surface, theme, and look-and-feel must match AG Grid v35+ (the reference
+app `apps/agref` pins the installed version — check it, it may be v36+).
+
+Before implementing, changing, or verifying ANY grid feature, complete this
+research phase first. Do not write feature code before it is done.
+
+## 1. Gather the authoritative API surface
+
+- Read the installed type definitions (most authoritative, exact version):
+  - `node_modules/ag-grid-community/dist/types/src/entities/gridOptions.d.ts`
+  - `node_modules/ag-grid-community/dist/types/src/entities/colDef.d.ts`
+  - `node_modules/ag-grid-community/dist/types/src/api/gridApi.d.ts`
+  - `node_modules/ag-grid-community/dist/types/src/events.d.ts`
+  - Feature interfaces under `node_modules/ag-grid-community/dist/types/src/interfaces/`
+- Fetch the current AG Grid docs page(s) for the feature
+  (https://www.ag-grid.com/react-data-grid/<feature>/) for behavior, nuances,
+  defaults, deprecations, and interactions with other features. Also check
+  `agref.txt` in the repo root.
+
+## 2. Produce a feature checklist before coding
+
+Enumerate, explicitly:
+
+- All grid options + col-def options for the feature (names, types, defaults)
+- All GridApi methods and their exact signatures
+- All events (including start/end pairs, e.g. `pasteStart`/`pasteEnd`)
+- Callback/processor hooks (e.g. `processCellFromClipboard`)
+- Behavioral nuances: edge cases, precedence, what happens on empty/filtered
+  data, keyboard interactions, deprecated options to avoid
+- UI/UX details: labels, layout, icons, overlays wording, status bar text
+
+## 3. Implement and verify
+
+- Match AG names and semantics exactly in `packages/core/src/types.ts` unless
+  physically impossible in a canvas grid; document intentional deviations.
+- Never introduce invented option names when an AG equivalent exists
+  (past example: a custom `treeDataKeyField` had to be replaced by AG's
+  `autoGroupColumnDef.field`).
+- Add/extend a matching page in `apps/agref` and verify side by side in the
+  browser (same seeded data), comparing behavior, wording, and visuals — not
+  just compilation.
