@@ -91,11 +91,12 @@ self.addEventListener('message', (e: MessageEvent<DataWorkerRequest>) => {
         if (result.kind === 'aggregates') {
           const push: DataWorkerPush = { type: 'aggregatesUpdated', updates: result.updates };
           workerScope.postMessage(push);
-        } else {
+        } else if (result.kind === 'model') {
           const rules = rulesPass.evaluate(pipeline) ?? undefined;
           const push: DataWorkerPush = { type: 'modelUpdated', output: result.output, rules };
           workerScope.postMessage(push);
         }
+        // dataOnly: store updated; main invalidates viewport — no model push
         break;
       }
       case 'setRulesConfig':

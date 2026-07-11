@@ -77,8 +77,9 @@ export class RowModel<TData = unknown> {
     return this.dataMirrorDropped ? [] : this.original;
   }
 
+  /** True while main-thread row objects are still retained. */
   get dataMirrorActive(): boolean {
-    return this.dataMirrorDropped;
+    return !this.dataMirrorDropped;
   }
   private byId = new Map<string, TData>();
   private originalIndex = new Map<string, number>();
@@ -100,6 +101,12 @@ export class RowModel<TData = unknown> {
   filterModel: FilterModel = {};
   /** Persist expand/collapse across refreshes. */
   groupExpanded = new Map<string, boolean>();
+  /**
+   * When set, overrides `groupDefaultExpanded` on the next worker/main refresh:
+   * true → expand all (-1), false → collapse all (0). Cleared by per-node toggles
+   * only insofar as explicit `groupExpanded` entries win over the default.
+   */
+  expandAllIntent: boolean | null = null;
   /** Master/detail: expand state per master row id. */
   masterExpanded = new Map<string, boolean>();
   /**
@@ -555,6 +562,8 @@ export class RowModel<TData = unknown> {
   }
 
   expandAll(expanded: boolean): void {
+    this.groupExpanded.clear();
+    this.expandAllIntent = expanded;
     const walk = (nodes: GroupNode<TData>[]): void => {
       for (const n of nodes) {
         this.groupExpanded.set(n.id, expanded);
@@ -569,6 +578,8 @@ export class RowModel<TData = unknown> {
       }
     };
     walkTree(this.treeRoots);
+    // Worker path relies on expandAllIntent → groupDefaultExpanded -1/0;
+    // no need to enumerate displayed nodes (that fought collapseAll).
   }
 
   /** Re-run filter + sort (+ optional group or tree) into displayed nodes. */

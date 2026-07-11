@@ -201,6 +201,10 @@ export class Tabular<TData = unknown> {
   /** Cached viewport chunk from the data worker (W5). */
   private viewportChunk: ViewportChunk | null = null;
   private viewportPrefetchGen = 0;
+  /** Last successful/in-flight prefetch key — skip redundant full-column fetches. */
+  private viewportPrefetchKey = '';
+  /** Drop the main-thread row mirror after the first warm viewport chunk. */
+  private pendingMirrorDrop = false;
   /** PREV([field]) snapshots on the main thread (main-path calc). */
   private readonly prevByRow = new Map<string, Map<string, unknown>>();
 
@@ -370,7 +374,11 @@ export class Tabular<TData = unknown> {
       get destroyed() {
         return grid.destroyed;
       },
-      requestPaint: () => grid.requestPaint(),
+      requestPaint: (opts) => grid.requestPaint(opts),
+      invalidateViewportPrefetch: () => grid.invalidateViewportPrefetch(),
+      get workerOwnsRowData() {
+        return grid.options.workerOwnsRowData === true;
+      },
       updateStatusBar: () => grid.updateStatusBar(),
       flashCellChange: (c) => grid.flashCellChange(c),
       get enableCellFlash() {
@@ -1187,10 +1195,24 @@ export class Tabular<TData = unknown> {
   };
 
   private valueAtDisplayed = (rowIndex: number, col: InternalColumn<TData>): unknown => {
+    const node = this.rows.getDisplayedNode(rowIndex);
+    // Cgrid-aligned default: keep mirror and paint leaves from it so ticks are
+    // not gated on getViewport. Chunk-only when workerOwnsRowData (Extreme).
+    if (
+      !this.workerOwnsRowDataActive() &&
+      node &&
+      !node.group &&
+      !node.footer &&
+      !node.detail &&
+      node.data
+    ) {
+      if (col.colId === 'ag-Grid-AutoColumn') return '';
+      return this.valueOf(node.data, col, rowIndex);
+    }
+
     const fromChunk = this.valueFromViewportChunk(rowIndex, col);
     if (fromChunk !== undefined) return fromChunk;
 
-    const node = this.rows.getDisplayedNode(rowIndex);
     if (!node) return undefined;
     if (col.colId === 'ag-Grid-AutoColumn') {
       if (node.group) return node.key;
@@ -2088,9 +2110,13 @@ export class Tabular<TData = unknown> {
     return grouped ? `${agg}(${base})` : base;
   };
 
-  requestPaint(): void {
+  /**
+   * Schedule a canvas repaint. Prefetch viewport chunks only when needed
+   * (scroll / model) — flash decay frames must not hammer getViewport.
+   */
+  requestPaint(opts?: { prefetch?: boolean }): void {
     if (this.paintPending || this.destroyed) return;
-    this.scheduleViewportPrefetch();
+    if (opts?.prefetch !== false) this.scheduleViewportPrefetch();
     this.paintPending = true;
     this.rafId = requestAnimationFrame(() => {
       this.paintPending = false;
@@ -2124,9 +2150,10 @@ export class Tabular<TData = unknown> {
       this.emit('firstDataRendered', { api: this });
     }
     // Flash decay is a pure function of time — keep repainting while active.
+    // Do not refetch viewport on every flash frame (cgrid: paint current chunk).
     const now = performance.now();
     if (this.flashMgr.hasActive(now) || this.rulesAttach?.engine.hasTimedRules(now)) {
-      this.requestPaint();
+      this.requestPaint({ prefetch: false });
     }
   }
 
@@ -2608,7 +2635,12 @@ export class Tabular<TData = unknown> {
       sortModel: this.cols.sortModel(),
       groupCols,
       aggCols,
-      groupDefaultExpanded: this.options.groupDefaultExpanded ?? 0,
+      groupDefaultExpanded:
+        this.rows.expandAllIntent === true
+          ? -1
+          : this.rows.expandAllIntent === false
+            ? 0
+            : (this.options.groupDefaultExpanded ?? 0),
       expandedState: [...this.rows.groupExpanded.entries()],
       groupTotalRow: resolvedGroupTotal,
       groupSuppressBlankHeader: this.options.groupSuppressBlankHeader,
@@ -2640,8 +2672,8 @@ export class Tabular<TData = unknown> {
   private workerOwnsRowDataActive(): boolean {
     if (!this.workerCoord.dataPlaneActive) return false;
     if (this.options.workerCompareMode === true) return false;
-    if (this.options.workerOwnsRowData === false) return false;
-    return true;
+    // Opt-in only (Extreme). Default keeps the main-thread mirror.
+    return this.options.workerOwnsRowData === true;
   }
 
   private applyWorkerModelFromWorker(output: WorkerModelOutput): void {
@@ -2649,16 +2681,24 @@ export class Tabular<TData = unknown> {
       this.compareWorkerOutput(output, this.workerCompareSnapshot);
       this.workerCompareSnapshot = null;
     }
-    this.viewportChunk = null;
+    const nextIds = output.displayed.map((d) => d.id);
+    const prevIds = this.rows.displayedIds;
+    const structural =
+      prevIds.length !== nextIds.length || prevIds.some((id, i) => id !== nextIds[i]);
+    // Keep the current chunk across non-structural model pushes so scroll/ticks
+    // never blank; only drop when the displayed identity list changes.
+    if (structural) {
+      this.viewportChunk = null;
+    }
+    this.viewportPrefetchKey = '';
     if (output.pivotKeyPaths !== undefined) {
       this.applyPivotResultColumnsFromPaths(output.pivotKeyPaths);
     } else if (!this.isWorkerPivotActive()) {
       this.cols.clearPivotResultColumns();
     }
     this.rows.applyWorkerModel(output);
-    if (this.workerOwnsRowDataActive()) {
-      this.rows.dropDataMirror();
-    }
+    // Extreme opt-in: drop mirror after the first warm viewport chunk.
+    this.pendingMirrorDrop = this.workerOwnsRowDataActive();
     this.afterModelRefresh(true);
   }
 
@@ -2735,27 +2775,68 @@ export class Tabular<TData = unknown> {
     return undefined;
   }
 
+  /** Drop the prefetch key so the next paint refetches; keep the current chunk. */
+  invalidateViewportPrefetch(): void {
+    this.viewportPrefetchKey = '';
+  }
+
   private scheduleViewportPrefetch(): void {
     if (!this.workerCoord.dataPlaneActive || !this.workerCoord.dataClient) return;
-    const gen = ++this.viewportPrefetchGen;
     const pageStart = this.pageRowStart();
     const pageEnd = this.pageRowEnd();
     const rowH = this.theme.rowHeight;
     const overscan = Math.max(20, Math.ceil((this.viewHeight / rowH) * 2));
     const rowStart = Math.max(0, pageStart - overscan);
     const rowEnd = Math.min(this.rows.displayed.length, pageEnd + overscan);
-    const columns = this.cols
-      .displayed()
-      .filter((c) => this.workerColumnField(c))
-      .map((c) => c.colId);
-    if (!columns.length) return;
+    const columns = this.viewportPrefetchColumns();
+    if (!columns.length || rowEnd <= rowStart) return;
+    const key = `${rowStart}:${rowEnd}:${columns.join('\0')}`;
+    // Avoid restarting a multi-second Extreme viewport fetch on every rAF paint.
+    if (key === this.viewportPrefetchKey) return;
+    const gen = ++this.viewportPrefetchGen;
+    this.viewportPrefetchKey = key;
     void this.workerCoord
       .requestViewport({ rowStart, rowEnd, columns })
       .then((chunk) => {
-        if (this.destroyed || gen !== this.viewportPrefetchGen || !chunk) return;
+        if (this.destroyed || gen !== this.viewportPrefetchGen) return;
+        if (!chunk) {
+          // Allow a later paint to retry the same window.
+          if (this.viewportPrefetchKey === key) this.viewportPrefetchKey = '';
+          return;
+        }
         this.viewportChunk = chunk;
+        if (this.pendingMirrorDrop) {
+          this.rows.dropDataMirror();
+          this.pendingMirrorDrop = false;
+        }
         if (!this.paintPending) this.paint();
       });
+  }
+
+  /** Columns needed for the current horizontal window (pinned + center overscan). */
+  private viewportPrefetchColumns(): string[] {
+    const out: string[] = [];
+    const push = (col: InternalColumn<TData>): void => {
+      if (this.workerColumnField(col)) out.push(col.colId);
+    };
+    for (const c of this.cols.left.cols) push(c);
+    for (const c of this.cols.right.cols) push(c);
+    const center = this.cols.center;
+    if (!center.cols.length) return out;
+    const viewW = Math.max(0, this.viewWidth - this.cols.left.width - this.cols.right.width);
+    const overscanPx = Math.max(200, viewW);
+    const [first, last] = this.cols.visibleRange(
+      center,
+      this.scrollLeft - overscanPx,
+      this.scrollLeft + viewW + overscanPx,
+    );
+    if (last >= first) {
+      for (let i = first; i <= last; i++) {
+        const c = center.cols[i];
+        if (c) push(c);
+      }
+    }
+    return out;
   }
 
   private compareWorkerOutput(

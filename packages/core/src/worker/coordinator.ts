@@ -16,7 +16,11 @@ import type { RulesEvalResult } from '@tabular/rules';
 
 export interface WorkerCoordinatorHost {
   destroyed: boolean;
-  requestPaint(): void;
+  requestPaint(opts?: { prefetch?: boolean }): void;
+  /** Force a viewport chunk refetch without blanking the current frame. */
+  invalidateViewportPrefetch(): void;
+  /** True when paint uses chunk-only mode (Extreme); ticks must refresh chunks. */
+  readonly workerOwnsRowData: boolean;
   updateStatusBar(): void;
   flashCellChange(c: { rowId: string; colKey: string; dir: 1 | -1 | 0 }): void;
   enableCellFlash: boolean;
@@ -24,12 +28,40 @@ export interface WorkerCoordinatorHost {
   patchGroupAggregates(updates: GroupAggUpdate[]): CellChange[];
   fallbackToMain(reason: string): void;
   onRulesResult?(rules: RulesEvalResult): void;
-  /** True when the main-thread row mirror is active (config-only worker sync). */
+  /** True when the main-thread row mirror is still retained. */
   readonly dataMirrorActive: boolean;
   restoreDataMirror(rows: unknown[]): void;
   syncWorkerRulesConfig(client: DataWorkerClient): Promise<void>;
   /** Called once when deprecated workerAggregation=false with data plane active. */
   warnWorkerAggregationIgnored?(): void;
+}
+
+function mergeAggTx(into: AggTransactionPayload, tx: AggTransactionPayload): void {
+  if (tx.addIds?.length) {
+    (into.addIds ??= []).push(...tx.addIds);
+    (into.add ??= []).push(...(tx.add ?? []));
+  }
+  if (tx.removeIds?.length) {
+    (into.removeIds ??= []).push(...tx.removeIds);
+  }
+  if (tx.updateIds?.length) {
+    into.updateIds ??= [];
+    into.update ??= [];
+    const seen = new Map<string, number>();
+    for (let i = 0; i < into.updateIds.length; i++) seen.set(into.updateIds[i]!, i);
+    for (let i = 0; i < tx.updateIds.length; i++) {
+      const id = tx.updateIds[i]!;
+      const row = tx.update![i];
+      const prev = seen.get(id);
+      if (prev !== undefined) {
+        into.update[prev] = row;
+      } else {
+        seen.set(id, into.updateIds.length);
+        into.updateIds.push(id);
+        into.update.push(row);
+      }
+    }
+  }
 }
 
 export class WorkerCoordinator {
@@ -40,6 +72,14 @@ export class WorkerCoordinator {
   private workerMirrorSynced = false;
   /** Snapshot retained for worker-fallback restore when the mirror is dropped. */
   private workerSeedRows: unknown[] | null = null;
+  /**
+   * Serialise all worker RPCs. Tick floods otherwise starve setPipelineConfig +
+   * rebuildModel (expand/collapse never lands).
+   */
+  private opChain: Promise<void> = Promise.resolve();
+  /** Coalesced update-only payloads waiting for the next op-chain slot. */
+  private pendingTx: AggTransactionPayload | null = null;
+  private txFlushEnqueued = false;
 
   constructor(private readonly host: WorkerCoordinatorHost) {}
 
@@ -81,11 +121,23 @@ export class WorkerCoordinator {
 
   requestViewport(req: ViewportRequest): Promise<ViewportChunk | null> {
     if (!this.dataWorkerActive || !this.dataWorker) return Promise.resolve(null);
-    return this.dataWorker.getViewport(req).catch(() => null);
+    return this.dataWorker.getViewport(req).catch((err) => {
+      console.warn(
+        '[tabular] viewport prefetch failed',
+        err instanceof Error ? err.message : String(err),
+      );
+      return null;
+    });
   }
 
   teardown(): void {
     this.teardownDataWorker();
+  }
+
+  private enqueue(op: () => Promise<void>): void {
+    this.opChain = this.opChain.then(op).catch((err) => {
+      this.fallbackDataWorker(err instanceof Error ? err.message : String(err));
+    });
   }
 
   private ensureDataWorker(): DataWorkerClient | null {
@@ -109,7 +161,14 @@ export class WorkerCoordinator {
               for (const c of aggChanges) this.host.flashCellChange(c);
             }
             this.host.updateStatusBar();
+          }
+          // Leaf cells also changed on the worker — refresh viewport only in
+          // chunk-only (owns) mode; mirror mode paints from main row objects.
+          if (this.host.workerOwnsRowData) {
+            this.host.invalidateViewportPrefetch();
             this.host.requestPaint();
+          } else {
+            this.host.requestPaint({ prefetch: false });
           }
         },
       );
@@ -126,30 +185,25 @@ export class WorkerCoordinator {
     this.dataWorkerActive = true;
     this.host.warnWorkerAggregationIgnored?.();
 
-    const configOnly = this.workerMirrorSynced && this.host.dataMirrorActive;
-
-    if (configOnly) {
-      void client
-        .setPipelineConfig(config)
-        .then(() => this.host.syncWorkerRulesConfig(client))
-        .then(() => client.rebuildModel())
-        .catch((err) => this.fallbackDataWorker(err instanceof Error ? err.message : String(err)));
-      return;
-    }
-
     if (!this.workerSeedRows?.length && rows.length) {
       this.workerSeedRows = rows.slice();
     }
 
-    void client
-      .setPipelineConfig(config)
-      .then(() => this.host.syncWorkerRulesConfig(client))
-      .then(() => client.setRowData(ids, rows))
-      .then(() => client.rebuildModel())
-      .then(() => {
-        this.workerMirrorSynced = true;
-      })
-      .catch((err) => this.fallbackDataWorker(err instanceof Error ? err.message : String(err)));
+    // Drop coalesced ticks that targeted the pre-rebuild model; fresh ticks
+    // after rebuild will repopulate pendingTx.
+    this.pendingTx = null;
+
+    const mirrorSynced = this.workerMirrorSynced;
+    this.enqueue(async () => {
+      if (this.host.destroyed || !this.dataWorkerActive || this.dataWorker !== client) return;
+      await client.setPipelineConfig(config);
+      await this.host.syncWorkerRulesConfig(client);
+      if (!mirrorSynced) {
+        await client.setRowData(ids, rows);
+      }
+      await client.rebuildModel();
+      this.workerMirrorSynced = true;
+    });
   }
 
   private fallbackDataWorker(reason: string): void {
@@ -157,7 +211,7 @@ export class WorkerCoordinator {
       this.dataWorkerFallbackLogged = true;
       console.warn(`[tabular] worker data plane unavailable (${reason}); using main thread`);
     }
-    if (this.host.dataMirrorActive && this.workerSeedRows?.length) {
+    if (!this.host.dataMirrorActive && this.workerSeedRows?.length) {
       this.host.restoreDataMirror(this.workerSeedRows);
     }
     this.workerMirrorSynced = false;
@@ -168,16 +222,40 @@ export class WorkerCoordinator {
   private teardownDataWorker(): void {
     this.dataWorkerActive = false;
     this.workerMirrorSynced = false;
+    this.pendingTx = null;
+    this.txFlushEnqueued = false;
+    this.opChain = Promise.resolve();
     this.dataWorker?.destroy();
     this.dataWorker = null;
   }
 
-  /** Stream a transaction batch to the data-plane worker. */
+  /** Stream a transaction batch to the data-plane worker (coalesced + serialised). */
   private forwardTransactionToDataWorker(tx: AggTransactionPayload): void {
     if (!this.dataWorkerActive || !this.dataWorker) return;
     if (!tx.addIds?.length && !tx.updateIds?.length && !tx.removeIds?.length) return;
-    void this.dataWorker
-      .applyTransaction(tx)
-      .catch((err) => this.fallbackDataWorker(err instanceof Error ? err.message : String(err)));
+
+    if (!this.pendingTx) this.pendingTx = {};
+    mergeAggTx(this.pendingTx, tx);
+    if (this.txFlushEnqueued) return;
+    this.txFlushEnqueued = true;
+
+    this.enqueue(async () => {
+      this.txFlushEnqueued = false;
+      const client = this.dataWorker;
+      if (this.host.destroyed || !this.dataWorkerActive || !client) return;
+      const batch = this.pendingTx;
+      this.pendingTx = null;
+      if (!batch) return;
+      if (!batch.addIds?.length && !batch.updateIds?.length && !batch.removeIds?.length) return;
+      await client.applyTransaction(batch);
+      if (this.host.destroyed || !this.dataWorkerActive) return;
+      if (this.host.workerOwnsRowData) {
+        this.host.invalidateViewportPrefetch();
+        this.host.requestPaint();
+      } else {
+        // Mirror already updated on main — paint without getViewport thrash.
+        this.host.requestPaint({ prefetch: false });
+      }
+    });
   }
 }

@@ -980,10 +980,11 @@ export interface GridOptions<TData = unknown> {
    */
   workerCompareMode?: boolean;
   /**
-   * When the data worker is active, drop the main-thread row object mirror
-   * after the initial sync. Paint reads viewport chunks; transactions
-   * forward to the worker only. Defaults to true; forced off when
-   * `workerCompareMode` is true so differential tests retain mirrors.
+   * When the data worker is active and this is true, drop the main-thread row
+   * object mirror after the first warm viewport chunk (Extreme / memory mode).
+   * Paint then relies on viewport chunks only. Default **false** (cgrid-aligned:
+   * keep the mirror for API, rules, and blank-free paint fallback). Forced off
+   * when `workerCompareMode` is true.
    */
   workerOwnsRowData?: boolean;
   /** Hide the agg func from headers (`sum(Notional)` → `Notional`). Default false. */

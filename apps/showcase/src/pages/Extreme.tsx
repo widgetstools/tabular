@@ -100,6 +100,7 @@ export function ExtremePage() {
           getRowId={(p) => String(p.data.id)}
           rowDataMode={mainMode ? 'main' : 'worker'}
           workerCompareMode={compareMode && !mainMode}
+          workerOwnsRowData={!mainMode && !compareMode}
           density="dense"
           cellSelection
           sideBar

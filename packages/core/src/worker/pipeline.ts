@@ -25,6 +25,7 @@ import { AggEngine } from './incrementalAgg';
 
 export type ApplyAndResolveResult =
   | { kind: 'aggregates'; updates: GroupAggUpdate[] }
+  | { kind: 'dataOnly' }
   | { kind: 'model'; output: WorkerModelOutput };
 
 export class DataPipeline {
@@ -90,17 +91,21 @@ export class DataPipeline {
    * - If only agg-input fields changed AND group keys unchanged AND grouping
    *   active AND no filter/sort/calc invalidation → incremental AggEngine path,
    *   return { kind: 'aggregates', updates }
+   * - Else if update-only with no pipeline-field changes → store update only
+   *   ({ kind: 'dataOnly' }) — main refreshes the viewport chunk
    * - Else full rebuild → { kind: 'model', output }
    */
   applyAndResolve(tx: AggTransactionPayload): ApplyAndResolveResult {
     const incremental = this.canUseIncrementalAgg(tx);
+    const dataOnly = !incremental && this.canSkipModelRebuild(tx);
     this.store.applyTransaction(tx);
-    if (!incremental) {
-      return { kind: 'model', output: this.rebuild() };
+    if (incremental) {
+      const updates = this.aggEngine.applyTransaction(tx);
+      this.patchDisplayedAggData(updates);
+      return { kind: 'aggregates', updates };
     }
-    const updates = this.aggEngine.applyTransaction(tx);
-    this.patchDisplayedAggData(updates);
-    return { kind: 'aggregates', updates };
+    if (dataOnly) return { kind: 'dataOnly' };
+    return { kind: 'model', output: this.rebuild() };
   }
 
   getColumnFields(): Map<string, ViewportColSpec> {
@@ -252,21 +257,49 @@ export class DataPipeline {
     const pipelineFields = new Set<string>();
     const aggInputFields = new Set<string>();
 
+    // Structural keys only — not every displayed column. Including all
+    // sortCols/filterCols here forced a full model rebuild on every tick
+    // (price/pnl live in those maps) and blanked the viewport.
     for (const c of config.groupCols) pipelineFields.add(c.field);
-    for (const c of config.filterCols) pipelineFields.add(c.field);
-    for (const c of config.sortCols) pipelineFields.add(c.field);
+    for (const c of config.pivotCols ?? []) pipelineFields.add(c.field);
+
+    const filterByColId = new Map(config.filterCols.map((c) => [c.colId, c.field]));
+    for (const colId of Object.keys(config.filterModel ?? {})) {
+      const field = filterByColId.get(colId);
+      if (field) pipelineFields.add(field);
+    }
+    if (config.quickFilterTerms.length > 0) {
+      for (const c of config.filterCols) pipelineFields.add(c.field);
+    }
+
+    const sortByColId = new Map(config.sortCols.map((c) => [c.colId, c.field]));
+    for (const s of config.sortModel ?? []) {
+      const field = sortByColId.get(s.colId);
+      if (field) pipelineFields.add(field);
+    }
+
     for (const a of config.aggCols) {
       aggInputFields.add(a.field);
       if (a.weightField) aggInputFields.add(a.weightField);
     }
-    for (const c of config.pivotCols ?? []) pipelineFields.add(c.field);
     for (const v of config.valueCols ?? []) {
       aggInputFields.add(v.field);
       if (v.weightField) aggInputFields.add(v.weightField);
     }
 
-    const filterFields = new Set(config.filterCols.map((c) => c.field));
-    const sortFields = new Set(config.sortCols.map((c) => c.field));
+    const filterFields = new Set(
+      Object.keys(config.filterModel ?? {})
+        .map((id) => filterByColId.get(id))
+        .filter((f): f is string => !!f),
+    );
+    if (config.quickFilterTerms.length > 0) {
+      for (const c of config.filterCols) filterFields.add(c.field);
+    }
+    const sortFields = new Set(
+      (config.sortModel ?? [])
+        .map((s) => sortByColId.get(s.colId))
+        .filter((f): f is string => !!f),
+    );
     for (const calc of config.calcCols ?? []) {
       const handle = compileCalcColumn(calc.colId, calc.source);
       const affectsPipeline =
@@ -303,6 +336,22 @@ export class DataPipeline {
       for (const key of this.changedKeys(oldRow, newRow)) {
         if (this.pipelineFields.has(key)) return false;
         if (!this.aggInputFields.has(key)) return false;
+      }
+    }
+    return true;
+  }
+
+  /** Update-only, no filter/sort/group key changes — store write without rebuild. */
+  private canSkipModelRebuild(tx: AggTransactionPayload): boolean {
+    if (tx.addIds?.length || tx.add?.length || tx.removeIds?.length) return false;
+    if (!tx.update?.length || !tx.updateIds?.length) return false;
+    for (let i = 0; i < tx.update.length; i++) {
+      const id = tx.updateIds[i]!;
+      const oldRow = this.store.getRow(id);
+      if (!oldRow) return false;
+      const newRow = tx.update[i] as Record<string, unknown>;
+      for (const key of this.changedKeys(oldRow, newRow)) {
+        if (this.pipelineFields.has(key)) return false;
       }
     }
     return true;
