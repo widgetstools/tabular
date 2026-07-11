@@ -152,6 +152,9 @@ export function findStickyGroup<TData>(
   firstRow: number,
 ): import('./grouping').DisplayedNode<TData> | null {
   if (env.groupSticky === false) return null;
+  // Flat data has no group rows: skip the upward scan entirely (it would walk
+  // all the way to row 0 on every paint once scrolled deep into the grid).
+  if (!env.rows.hasGroupRows) return null;
   let groupIdx = -1;
   for (let r = firstRow; r >= 0; r--) {
     const n = env.rows.getDisplayedNode(r);
@@ -661,9 +664,11 @@ export function paintHeader<TData>(ctx: CanvasRenderingContext2D, env: PaintEnv<
   const colRowH = layout?.columnHeaderHeight ?? t.headerHeight;
   const colRowTop = layout ? layout.maxGroupDepth * groupRowH : 0;
 
-  ctx.clearRect(0, 0, viewWidth, totalH);
+  // Opaque context (`alpha: false`): the background fill replaces clearRect.
+  // Fill the full backing width — the header canvas extends over the
+  // scrollbar gutter, which otherwise shows as an unpainted strip.
   ctx.fillStyle = t.headerBg;
-  ctx.fillRect(0, 0, viewWidth, totalH);
+  ctx.fillRect(0, 0, Math.max(viewWidth, ctx.canvas.width), totalH);
 
   const centerViewX0 = cols.left.width;
   const centerViewX1 = viewWidth - cols.right.width;
@@ -1409,22 +1414,65 @@ function paintUnifiedRangeStroke<TData>(
 
 // ── body ───────────────────────────────────────────────────────────────
 
-export function paintBody<TData>(ctx: CanvasRenderingContext2D, env: PaintEnv<TData>): void {
+/** Previous-frame state enabling the vertical-scroll blit fast path. */
+export interface BodyBlit {
+  prevScrollTop: number;
+  dpr: number;
+}
+
+export function paintBody<TData>(
+  ctx: CanvasRenderingContext2D,
+  env: PaintEnv<TData>,
+  blit?: BodyBlit | null,
+): void {
   const { theme: t, cols, rows, viewWidth, viewHeight, scrollTop } = env;
   const now = performance.now();
 
-  ctx.clearRect(0, 0, viewWidth, viewHeight);
-  ctx.fillStyle = t.base;
-  ctx.fillRect(0, 0, viewWidth, viewHeight);
-
   const pageStart = env.pagination?.pageStart ?? 0;
   const pageEnd = env.pagination?.pageEnd ?? rows.displayed.length;
-  if (pageEnd <= pageStart) return;
-  if (scrollTop >= env.contentHeight) return;
+  const empty = pageEnd <= pageStart || scrollTop >= env.contentHeight;
 
-  const firstRow = env.rowAtY(scrollTop);
-  const lastRow = Math.min(pageEnd - 1, env.rowAtY(scrollTop + viewHeight - 1));
-  if (lastRow < firstRow) return;
+  let firstRow = empty ? 0 : env.rowAtY(scrollTop);
+  let lastRow = empty ? -1 : Math.min(pageEnd - 1, env.rowAtY(scrollTop + viewHeight - 1));
+  const sticky = empty || lastRow < firstRow ? null : findStickyGroup(env, firstRow);
+
+  // Vertical-scroll fast path: nothing changed since the last paint except
+  // scrollTop — shift the previous frame's pixels with a self-drawImage and
+  // repaint only the rows the scroll exposed. This turns per-frame paint cost
+  // from O(viewport cells) into O(scrolled-in cells), which is what keeps
+  // scrolling usable on CPU-rasterized environments (OpenFin/VDI with the GPU
+  // disabled, occluded-window recovery, low-end hardware). Bails out whenever
+  // any viewport-position-dependent painting is active (sticky group header,
+  // merged row spans) or the device-pixel delta is fractional.
+  let blitted = false;
+  if (blit && !empty && lastRow >= firstRow && !sticky && !env.enableCellSpan) {
+    const dy = scrollTop - blit.prevScrollTop;
+    if (dy === 0) return; // previous frame's pixels are already correct
+    const dyDev = dy * blit.dpr;
+    if (Math.abs(dy) < viewHeight && Number.isInteger(dyDev)) {
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(ctx.canvas, 0, -dyDev);
+      ctx.restore();
+      // Narrow the paint window to rows intersecting the exposed band. A row
+      // straddling the copy seam is repainted whole — identical pixels land
+      // over the copied region, so no visible seam.
+      if (dy > 0) firstRow = Math.max(firstRow, env.rowAtY(scrollTop + viewHeight - dy));
+      else lastRow = Math.min(lastRow, env.rowAtY(scrollTop - dy - 1));
+      const bandY0 = rowY(env, firstRow);
+      const bandY1 = dy > 0 ? viewHeight : rowY(env, lastRow) + env.rowHeightAt(lastRow);
+      ctx.fillStyle = t.base;
+      ctx.fillRect(0, bandY0, viewWidth, bandY1 - bandY0);
+      blitted = true;
+    }
+  }
+
+  if (!blitted) {
+    // Opaque context (`alpha: false`): the background fill replaces clearRect.
+    ctx.fillStyle = t.base;
+    ctx.fillRect(0, 0, viewWidth, viewHeight);
+    if (empty || lastRow < firstRow) return;
+  }
 
   const centerViewX0 = cols.left.width;
   const centerViewX1 = viewWidth - cols.right.width;
@@ -1577,7 +1625,6 @@ export function paintBody<TData>(ctx: CanvasRenderingContext2D, env: PaintEnv<TD
   }
 
   // Sticky group header (one row pinned to the top of the viewport).
-  const sticky = findStickyGroup(env, firstRow);
   if (sticky) {
     const stickyIdx = rows.displayedNodes.indexOf(sticky);
     if (stickyIdx >= 0) {
@@ -1629,9 +1676,9 @@ export function paintPinnedRows<TData>(
   const { theme: t, cols, viewWidth } = env;
   const rowH = env.uniformRowHeight;
   const bandH = data.length * rowH + 1;
-  ctx.clearRect(0, 0, viewWidth, bandH);
+  // Opaque context (`alpha: false`): the background fill replaces clearRect.
   ctx.fillStyle = t.base;
-  ctx.fillRect(0, 0, viewWidth, bandH);
+  ctx.fillRect(0, 0, Math.max(viewWidth, ctx.canvas.width), bandH);
 
   const centerViewX0 = cols.left.width;
   const centerViewX1 = viewWidth - cols.right.width;

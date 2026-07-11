@@ -880,6 +880,14 @@ export interface GridOptions<TData = unknown> {
    * (AG `enableCellSpan`, initial property). Default false.
    */
   enableCellSpan?: boolean;
+  /**
+   * Tabular extension: cap the canvas backing-store scale at this value
+   * (e.g. `1` renders at 1x on a 2x display). Painted-pixel cost is linear in
+   * `dpr²`, so capping is the main lever on software-rasterized environments
+   * — OpenFin/VDI/Citrix desktops running with the GPU disabled — at the cost
+   * of text sharpness. Default: unlimited (native `devicePixelRatio`).
+   */
+  maxDevicePixelRatio?: number;
   /** Fixed data-row height in px, overriding the theme/density default (AG `rowHeight`). */
   rowHeight?: number;
   /** Column-label header row height in px, overriding the theme (AG `headerHeight`). */

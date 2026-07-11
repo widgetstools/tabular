@@ -95,6 +95,8 @@ export class RowModel<TData = unknown> {
   /** Convenience: leaf data or null for group rows — same length as displayedNodes. */
   displayed: (TData | null)[] = [];
   displayedIds: string[] = [];
+  /** True when any displayed node is a group row — gates sticky-header scans. */
+  hasGroupRows = false;
   private displayedIndexOfId = new Map<string, number>();
 
   quickFilter = '';
@@ -859,6 +861,7 @@ export class RowModel<TData = unknown> {
     for (let i = 0; i < this.displayedIds.length; i++) {
       this.displayedIndexOfId.set(this.displayedIds[i], i);
     }
+    this.hasGroupRows = this.displayedNodes.some((n) => n.group);
   }
 }
 

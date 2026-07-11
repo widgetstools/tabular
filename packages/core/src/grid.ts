@@ -325,6 +325,12 @@ export class Tabular<TData = unknown> {
   // painting
   private rafId = 0;
   private paintPending = false;
+  /** Set by any repaint cause other than a pure scroll; cleared per frame. */
+  private paintFullNeeded = true;
+  /** Last-painted scroll position; valid only while canvas pixels survive. */
+  private lastPaintScrollTop = 0;
+  private lastPaintScrollLeft = 0;
+  private lastPaintValid = false;
   private firstPaintDone = false;
 
   // async transactions
@@ -576,11 +582,16 @@ export class Tabular<TData = unknown> {
     } satisfies Partial<CSSStyleDeclaration>);
     this.root.appendChild(this.ffClearLayer);
 
-    this.ctxH = this.headerCanvas.getContext('2d')!;
-    this.ctxB = this.bodyCanvas.getContext('2d')!;
+    // Opaque contexts: header/body/pinned always paint a full opaque
+    // background, and `alpha: false` lets the compositor skip per-pixel
+    // blending of these layers — a large win under software compositing
+    // (OpenFin/VDI with GPU disabled). The overlay canvas genuinely needs
+    // transparency and stays default.
+    this.ctxH = this.headerCanvas.getContext('2d', { alpha: false })!;
+    this.ctxB = this.bodyCanvas.getContext('2d', { alpha: false })!;
     this.ctxO = this.overlayCanvas.getContext('2d')!;
-    this.ctxPT = this.pinnedTopCanvas.getContext('2d')!;
-    this.ctxPB = this.pinnedBottomCanvas.getContext('2d')!;
+    this.ctxPT = this.pinnedTopCanvas.getContext('2d', { alpha: false })!;
+    this.ctxPB = this.pinnedBottomCanvas.getContext('2d', { alpha: false })!;
 
     // ── listeners ───────────────────────────────────────────────────
     this.listen(this.scroller, 'scroll', () => this.onScroll(), { passive: true });
@@ -605,6 +616,10 @@ export class Tabular<TData = unknown> {
 
     this.ro = new ResizeObserver(() => this.layout());
     this.ro.observe(this.root);
+    // devicePixelRatio changes (window dragged to a different-DPI monitor,
+    // browser zoom) do not fire the ResizeObserver when the CSS size is
+    // unchanged — without this the grid renders blurry until the next resize.
+    this.armDprListener();
 
     if (options.onGridReady) this.on('gridReady', options.onGridReady as Handler);
     if (options.onCellValueChanged) this.on('cellValueChanged', options.onCellValueChanged as Handler);
@@ -1650,13 +1665,22 @@ export class Tabular<TData = unknown> {
     this.viewWidth = this.scroller.clientWidth;
     this.viewHeight = this.scroller.clientHeight;
     if (this.paginationActive()) this.updateAutoPageSize();
-    this.dpr = window.devicePixelRatio || 1;
+    // Cap the backing-store scale when asked (software-rasterized machines —
+    // OpenFin/VDI with the GPU off — pay per painted pixel; dpr 2→1 is a 4×
+    // raster saving at the cost of text sharpness).
+    this.dpr = Math.min(
+      window.devicePixelRatio || 1,
+      this.options.maxDevicePixelRatio ?? Infinity,
+    );
 
     sizeCanvas(this.headerCanvas, contentWidth, headerH, this.dpr);
     sizeCanvas(this.bodyCanvas, this.viewWidth, this.viewHeight, this.dpr);
     sizeCanvas(this.overlayCanvas, this.viewWidth, this.viewHeight, this.dpr);
     if (pinnedTopH > 0) sizeCanvas(this.pinnedTopCanvas, this.viewWidth, pinnedTopH, this.dpr);
     if (pinnedBottomH > 0) sizeCanvas(this.pinnedBottomCanvas, this.viewWidth, pinnedBottomH, this.dpr);
+    // Canvas (re)allocation wipes pixels — the scroll-blit fast path must not
+    // copy from a cleared backing store.
+    this.lastPaintValid = false;
 
     this.requestPaint();
   }
@@ -2114,8 +2138,12 @@ export class Tabular<TData = unknown> {
    * Schedule a canvas repaint. Prefetch viewport chunks only when needed
    * (scroll / model) — flash decay frames must not hammer getViewport.
    */
-  requestPaint(opts?: { prefetch?: boolean }): void {
-    if (this.paintPending || this.destroyed) return;
+  requestPaint(opts?: { prefetch?: boolean; scrollOnly?: boolean }): void {
+    if (this.destroyed) return;
+    // Anything other than a pure scroll dirties the whole frame; the flag
+    // accumulates across coalesced requests until the next paint runs.
+    if (!opts?.scrollOnly) this.paintFullNeeded = true;
+    if (this.paintPending) return;
     if (opts?.prefetch !== false) this.scheduleViewportPrefetch();
     this.paintPending = true;
     this.rafId = requestAnimationFrame(() => {
@@ -2126,24 +2154,41 @@ export class Tabular<TData = unknown> {
 
   private paint(): void {
     if (this.destroyed || this.viewWidth === 0) return;
+    const scrollOnly = !this.paintFullNeeded && this.lastPaintValid;
+    this.paintFullNeeded = false;
     const env = this.env();
-    this.ctxH.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    // On a vertical-only scroll frame the header and pinned-row canvases are
+    // pixel-identical — skip them entirely (they only depend on scrollLeft).
+    const skipStatic = scrollOnly && this.scrollLeft === this.lastPaintScrollLeft;
+    if (!skipStatic) {
+      this.ctxH.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      paintHeader(this.ctxH, env);
+    }
+    const animNow = performance.now();
+    const animating =
+      this.flashMgr.hasActive(animNow) || !!this.rulesAttach?.engine.hasTimedRules(animNow);
+    const blit =
+      skipStatic && !animating
+        ? { prevScrollTop: this.lastPaintScrollTop, dpr: this.dpr }
+        : null;
     this.ctxB.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    paintHeader(this.ctxH, env);
-    paintBody(this.ctxB, env);
+    paintBody(this.ctxB, env, blit);
     this.syncFloatingFilterClearButtons(env);
     this.ctxO.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     paintOverlay(this.ctxO, env);
     const pinnedTop = this.options.pinnedTopRowData;
-    if (pinnedTop?.length) {
+    if (pinnedTop?.length && !skipStatic) {
       this.ctxPT.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
       paintPinnedRows(this.ctxPT, env, pinnedTop, 'top');
     }
     const pinnedBottom = this.options.pinnedBottomRowData;
-    if (pinnedBottom?.length) {
+    if (pinnedBottom?.length && !skipStatic) {
       this.ctxPB.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
       paintPinnedRows(this.ctxPB, env, pinnedBottom, 'bottom');
     }
+    this.lastPaintScrollTop = this.scrollTop;
+    this.lastPaintScrollLeft = this.scrollLeft;
+    this.lastPaintValid = true;
     this.syncDetailLayer();
     if (!this.firstPaintDone && this.rows.displayed.length) {
       this.firstPaintDone = true;
@@ -2187,6 +2232,27 @@ export class Tabular<TData = unknown> {
     };
   }
 
+  private dprCleanup: (() => void) | null = null;
+
+  /**
+   * Re-arm a one-shot matchMedia listener for the current devicePixelRatio;
+   * fires when the window moves to a monitor with a different DPI (or zoom
+   * changes), then re-lays-out at the new ratio and arms again.
+   */
+  private armDprListener(): void {
+    this.dprCleanup?.();
+    const mql = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    const onChange = (): void => {
+      mql.removeEventListener('change', onChange);
+      this.dprCleanup = null;
+      if (this.destroyed) return;
+      this.layout();
+      this.armDprListener();
+    };
+    mql.addEventListener('change', onChange);
+    this.dprCleanup = () => mql.removeEventListener('change', onChange);
+  }
+
   private onScroll(): void {
     this.scrollLeft = this.scroller.scrollLeft;
     this.scrollTop = this.logicalScrollTop();
@@ -2195,7 +2261,7 @@ export class Tabular<TData = unknown> {
     this.closeSetFilter();
     this.closeContextMenu();
     this.hideTooltip();
-    this.requestPaint();
+    this.requestPaint({ scrollOnly: true });
   }
 
   /**
@@ -8427,6 +8493,8 @@ export class Tabular<TData = unknown> {
     this.tooltipEl?.remove();
     this.tooltipEl = null;
     this.ro.disconnect();
+    this.dprCleanup?.();
+    this.dprCleanup = null;
     for (const fn of this.cleanups) fn();
     this.cleanups = [];
     this.closeEditor();
@@ -8528,10 +8596,17 @@ function ensureScrollbarStyles(): void {
 }
 
 function sizeCanvas(canvas: HTMLCanvasElement, cssW: number, cssH: number, dpr: number): void {
-  canvas.style.width = `${cssW}px`;
-  canvas.style.height = `${cssH}px`;
-  canvas.width = Math.max(1, Math.round(cssW * dpr));
-  canvas.height = Math.max(1, Math.round(cssH * dpr));
+  const w = Math.max(1, Math.round(cssW * dpr));
+  const h = Math.max(1, Math.round(cssH * dpr));
+  // Assigning width/height reallocates and wipes the backing store even when
+  // the value is unchanged — layout() runs per ResizeObserver tick and per
+  // sidebar-drag mousemove, so guard against no-op reallocation.
+  const styleW = `${cssW}px`;
+  const styleH = `${cssH}px`;
+  if (canvas.style.width !== styleW) canvas.style.width = styleW;
+  if (canvas.style.height !== styleH) canvas.style.height = styleH;
+  if (canvas.width !== w) canvas.width = w;
+  if (canvas.height !== h) canvas.height = h;
 }
 
 function clampInt(v: number, lo: number, hi: number): number {
