@@ -233,9 +233,8 @@ export class RowModel<TData = unknown> {
       }
       byId ??= indexNodes();
       const node = byId.get(u.groupId);
-      if (!node) continue;
-      const prev = { ...node.aggData };
-      Object.assign(node.aggData, u.agg);
+      const prev = node ? { ...node.aggData } : undefined;
+      if (node) Object.assign(node.aggData, u.agg);
       // Expanded groups with footers blank the header row (fresh {} in the
       // flatten) and carry the values on the footer copy.
       const fi = this.displayedIndexOfId.get(`${u.groupId}:footer`);
@@ -243,9 +242,17 @@ export class RowModel<TData = unknown> {
         const footer = this.displayedNodes[fi].aggData;
         pushDiff(`${u.groupId}:footer`, { ...footer }, u.agg);
         Object.assign(footer, u.agg);
-      } else {
-        const di = this.displayedIndexOfId.get(u.groupId);
-        if (di !== undefined) pushDiff(u.groupId, prev, u.agg);
+        continue;
+      }
+      const di = this.displayedIndexOfId.get(u.groupId);
+      if (di !== undefined) {
+        const target = this.displayedNodes[di].aggData;
+        if (!node) {
+          pushDiff(u.groupId, { ...target }, u.agg);
+          Object.assign(target, u.agg);
+        } else {
+          pushDiff(u.groupId, prev!, u.agg);
+        }
       }
     }
     return changes;
@@ -502,9 +509,7 @@ export class RowModel<TData = unknown> {
    * ids back to live objects held in `byId` unless the data mirror is dropped.
    */
   applyWorkerModel(output: WorkerModelOutput): void {
-    if (output.pivotKeyPaths !== undefined) {
-      this.lastPivotKeyPaths = output.pivotKeyPaths;
-    }
+    this.lastPivotKeyPaths = output.pivotKeyPaths ?? [];
     this.filteredSorted = [];
     this.filteredSortedIds = [];
     for (const id of output.filteredSortedIds) {
