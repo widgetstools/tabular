@@ -133,4 +133,7 @@ export type {
   WorkerPipelineConfig,
   WorkerModelOutput,
   GroupAggUpdate,
+  RenderPlaneConfig,
+  RenderWindowResult,
+  RenderDeltas,
 } from './worker/protocol';

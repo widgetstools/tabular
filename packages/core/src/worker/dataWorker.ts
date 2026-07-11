@@ -10,6 +10,7 @@ import { MeasureCache, offscreenMeasurer } from './measureText';
 import { deserializeTsv, serializeRanges } from './passes/clipboardPass';
 import { RulesPass } from './passes/rulesPass';
 import { DataPipeline } from './pipeline';
+import { RenderPlane } from './renderPlane';
 import type {
   DataWorkerPush,
   DataWorkerRequest,
@@ -21,6 +22,14 @@ import type {
 const pipeline = new DataPipeline();
 const rulesPass = new RulesPass();
 const measureCache = new MeasureCache();
+
+// ── Render plane (Task 6) — additive worker state ────────────────────
+/** Active render materializer; null until the client sends `setRenderConfig`. */
+let renderPlane: RenderPlane | null = null;
+/** Last window the client requested — the target for pushed render deltas. */
+let lastRenderWindow: { firstRow: number; lastRow: number } | null = null;
+/** Style-table version the client last saw (to trim redundant table sends). */
+let clientStyleTableVersion = -1;
 
 const workerScope = self as unknown as {
   postMessage(message: unknown, transfer?: Transferable[]): void;
@@ -42,6 +51,60 @@ function pushModel(): void {
   const rules = rulesPass.evaluate(pipeline) ?? undefined;
   const msg: DataWorkerPush = { type: 'modelUpdated', output, rules };
   workerScope.postMessage(msg);
+  // Additive: the render plane observed a model rebuild → advance revision.
+  renderPlane?.bumpRevision();
+}
+
+// ── Render plane (Task 6) — additive helpers ─────────────────────────
+
+/** Snapshot pre-apply values for updated ids (dir needs old vs new). */
+function captureRenderOld(
+  payload: { updateIds?: string[]; update?: unknown[] },
+): Map<string, Record<string, unknown>> {
+  const snap = new Map<string, Record<string, unknown>>();
+  if (!renderPlane || !payload.updateIds?.length) return snap;
+  for (const id of payload.updateIds) {
+    const row = pipeline.getRow(id);
+    // Shallow copy — the store may mutate rows in place on apply.
+    if (row) snap.set(id, { ...row });
+  }
+  return snap;
+}
+
+/**
+ * After ANY applied transaction, advance the render revision (the model the
+ * plane reads changed), then push rendered deltas for the last-requested
+ * window when the transaction carried updates.
+ */
+function pushRenderDeltas(
+  payload: { updateIds?: string[]; update?: unknown[] },
+  oldRows: Map<string, Record<string, unknown>>,
+): void {
+  const plane = renderPlane;
+  if (!plane) return;
+  // Bump BEFORE the update guard: add/remove-only transactions rebuild the
+  // displayed model too, and two different models must never share a revision.
+  plane.bumpRevision();
+  const win = lastRenderWindow;
+  if (!win || !payload.updateIds?.length) return;
+  const changes = plane.tickChanges(
+    payload.updateIds,
+    (id, field) => oldRows.get(id)?.[field],
+    (id, field) => pipeline.getRow(id)?.[field],
+  );
+  const deltas = plane.deltasFor(changes, win.firstRow, win.lastRow);
+  if (!deltas.length) return;
+  const styleTableVersion = plane.styleTableVersion;
+  const includeTable = styleTableVersion !== clientStyleTableVersion;
+  if (includeTable) clientStyleTableVersion = styleTableVersion;
+  const push: DataWorkerPush = {
+    type: 'renderDeltas',
+    modelRevision: plane.modelRevision,
+    deltas,
+    styleTableVersion,
+    ...(includeTable ? { styleTable: plane.styleTableSnapshot() } : {}),
+  };
+  workerScope.postMessage(push);
 }
 
 function leafRowsForExport(payload: WorkerCsvExportPayload): Record<string, unknown>[] {
@@ -86,6 +149,8 @@ self.addEventListener('message', (e: MessageEvent<DataWorkerRequest>) => {
         break;
       case 'applyTransaction': {
         rulesPass.noteTransaction(msg.payload);
+        // Additive: snapshot pre-apply values for render-delta tick direction.
+        const renderOld = captureRenderOld(msg.payload);
         const result = pipeline.applyAndResolve(msg.payload);
         reply(msg.id);
         if (result.kind === 'aggregates') {
@@ -97,6 +162,8 @@ self.addEventListener('message', (e: MessageEvent<DataWorkerRequest>) => {
           workerScope.postMessage(push);
         }
         // dataOnly: store updated; main invalidates viewport — no model push
+        // Additive: push rendered deltas for the last-requested window.
+        pushRenderDeltas(msg.payload, renderOld);
         break;
       }
       case 'setRulesConfig':
@@ -203,6 +270,45 @@ self.addEventListener('message', (e: MessageEvent<DataWorkerRequest>) => {
         for (const [colId, w] of widthsMap.entries()) widths[colId] = w;
         const response: DataWorkerResponse = { id: msg.id, type: 'autosizeResult', widths };
         workerScope.postMessage(response);
+        break;
+      }
+      case 'setRenderConfig': {
+        // Additive: (re)build the render materializer; reset client's table view.
+        renderPlane = new RenderPlane(pipeline, msg.payload);
+        clientStyleTableVersion = -1;
+        reply(msg.id);
+        break;
+      }
+      case 'renderWindow': {
+        if (!renderPlane) {
+          replyError(msg.id, 'render config not set');
+          break;
+        }
+        lastRenderWindow = { firstRow: msg.payload.firstRow, lastRow: msg.payload.lastRow };
+        // Lazy snapshot: pass the client's known version so materialize only
+        // builds the style table when the client is stale.
+        const win = renderPlane.materialize(
+          msg.payload.firstRow,
+          msg.payload.lastRow,
+          clientStyleTableVersion,
+        );
+        if (win.styleTable) clientStyleTableVersion = win.styleTableVersion;
+        const response: DataWorkerResponse = {
+          id: msg.id,
+          type: 'renderWindowResult',
+          modelRevision: win.modelRevision,
+          firstRow: win.firstRow,
+          rowIds: win.rowIds,
+          rowKind: win.rowKind,
+          rowLevel: win.rowLevel,
+          rowExpanded: win.rowExpanded,
+          text: win.text,
+          styleIds: win.styleIds,
+          styleTableVersion: win.styleTableVersion,
+          ...(win.styleTable ? { styleTable: win.styleTable } : {}),
+        };
+        // Transfer the styleIds buffer (zero-copy); text/rowIds stay structured.
+        workerScope.postMessage(response, [win.styleIds.buffer]);
         break;
       }
       default:

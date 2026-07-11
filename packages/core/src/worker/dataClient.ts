@@ -9,6 +9,9 @@ import type {
   DataWorkerResponse,
   GroupAggUpdate,
   ReqId,
+  RenderDeltas,
+  RenderPlaneConfig,
+  RenderWindowResult,
   ViewportChunk,
   ViewportRequest,
   WorkerAutosizeColumn,
@@ -51,6 +54,8 @@ export class DataWorkerClient {
     private worker: DataWorkerLike,
     private onModelUpdated: (output: WorkerModelOutput, rules?: RulesEvalResult) => void,
     private onAggregatesUpdated?: (updates: GroupAggUpdate[]) => void,
+    // Additive (Task 6): render-delta push consumer.
+    private onRenderDeltas?: (deltas: RenderDeltas) => void,
   ) {
     this.messageHandler = (e) => {
       if (this.destroyed) return;
@@ -73,6 +78,12 @@ export class DataWorkerClient {
           this.onAggregatesUpdated?.(updates);
         });
       }
+      return;
+    }
+    if (msg.type === 'renderDeltas') {
+      // Additive (Task 6): render-delta pushes bypass coalescing — the DOM
+      // grid flashes each tick as it arrives.
+      this.onRenderDeltas?.(msg);
       return;
     }
     if (msg.type === 'modelUpdated') {
@@ -146,6 +157,27 @@ export class DataWorkerClient {
       if (msg.type !== 'viewport') throw new Error(`unexpected response: ${msg.type}`);
       return msg;
     }).then((m) => m.chunk);
+  }
+
+  /** Additive (Task 6): set the render config (columns + formats/styles). */
+  setRenderConfig(config: RenderPlaneConfig): Promise<void> {
+    return this.sendVoid({ type: 'setRenderConfig', payload: config });
+  }
+
+  /**
+   * Additive (Task 6): request render-ready cells for `[firstRow, lastRow]`.
+   * Mirrors the viewport-chunk request pattern.
+   */
+  renderWindow(firstRow: number, lastRow: number): Promise<RenderWindowResult> {
+    return this.send(
+      { type: 'renderWindow', payload: { firstRow, lastRow } },
+      (msg) => {
+        if (msg.type !== 'renderWindowResult') {
+          throw new Error(`unexpected response: ${msg.type}`);
+        }
+        return msg;
+      },
+    );
   }
 
   clipboardSerialize(ranges: WorkerClipboardRange[], delimiter?: string): Promise<string> {

@@ -164,7 +164,9 @@ export type DataWorkerPush =
       /** Worker-evaluated rules delta (Phase 4); materialize on main. */
       rules?: import('@tabular/rules').RulesEvalResult;
     }
-  | { type: 'aggregatesUpdated'; updates: GroupAggUpdate[] };
+  | { type: 'aggregatesUpdated'; updates: GroupAggUpdate[] }
+  // Render plane (Task 6) — pushed after update transactions; additive.
+  | RenderDeltas;
 
 // ── Viewport (W5) ────────────────────────────────────────────────────
 
@@ -187,6 +189,76 @@ export interface ViewportChunk {
   groupChildCount?: Uint32Array;
   isExpanded?: Uint8Array;
   groupKey?: string[];
+}
+
+// ── Render plane (Task 6) ───────────────────────────────────────────
+//
+// ADDITIVE render-plane protocol: the worker materializes render-ready cells
+// (formatted text + deduped style-table ids) for a viewport window and pushes
+// pre-rendered tick deltas after update transactions. All messages carry
+// `modelRevision` (monotonic, bumped on every model rebuild/update the render
+// plane observes) so the client can drop stale responses.
+
+/**
+ * main → worker: describe how to render cells (set once per config change).
+ * Shipped whenever the display columns or their formats/styles change.
+ */
+export interface RenderPlaneConfig {
+  /** Display-order columns the renderer shows. */
+  cols: Array<{
+    colId: string;
+    field: string;
+    type?: 'number';
+    /** Format DSL string (ColDef.format); compiled worker-side. */
+    format?: string;
+    /** Static style — participates in the style table. */
+    cellStyle?: import('../types').CellStyle;
+  }>;
+  /** Auto-group column id: group/footer label text lands in this column. */
+  groupIndentColId?: string;
+}
+
+/** main → worker: request the render-ready cells for a viewport window. */
+export interface RenderWindowRequest {
+  type: 'renderWindow';
+  firstRow: number;
+  lastRow: number;
+}
+
+/**
+ * worker → main: render-ready cells for `[firstRow, lastRow]`. `text` and
+ * `styleIds` are row-major (rows × cols). `styleIds.buffer` is transferred.
+ * A style id of 0 means "no style"; ids are 1-based indices into the style
+ * table. `styleTable` is present only when the client's known
+ * `styleTableVersion` is stale.
+ */
+export interface RenderWindowResult {
+  type: 'renderWindowResult';
+  modelRevision: number;
+  firstRow: number;
+  rowIds: string[];
+  rowKind: Uint8Array; // 0 leaf, 1 group, 2 footer
+  rowLevel: Uint8Array;
+  rowExpanded: Uint8Array;
+  /** rows × cols, row-major. */
+  text: string[];
+  styleIds: Uint16Array; // transferable
+  styleTableVersion: number;
+  /** Present only when the client's known version is stale. */
+  styleTable?: import('../types').CellStyle[];
+}
+
+/**
+ * worker → main, pushed after update transactions. Each delta is a rendered
+ * cell inside the last-requested window; `dir` is the tick direction
+ * (1 up, -1 down, 0 flat) for flash animation.
+ */
+export interface RenderDeltas {
+  type: 'renderDeltas';
+  modelRevision: number;
+  deltas: Array<{ rowIndex: number; colIndex: number; text: string; styleId: number; dir: 1 | -1 | 0 }>;
+  styleTableVersion: number;
+  styleTable?: import('../types').CellStyle[];
 }
 
 // ── Worker services (W6) ────────────────────────────────────────────
@@ -240,7 +312,10 @@ export type DataWorkerRequest =
   | { id: ReqId; type: 'clipboardDeserialize'; payload: { text: string; delimiter?: string } }
   | { id: ReqId; type: 'exportCsv'; payload: WorkerCsvExportPayload }
   | { id: ReqId; type: 'exportXlsx'; payload: WorkerXlsxExportPayload }
-  | { id: ReqId; type: 'autosize'; payload: { columns: WorkerAutosizeColumn[]; skipHeader?: boolean; maxSampleSize?: number } };
+  | { id: ReqId; type: 'autosize'; payload: { columns: WorkerAutosizeColumn[]; skipHeader?: boolean; maxSampleSize?: number } }
+  // Render plane (Task 6) — additive.
+  | { id: ReqId; type: 'setRenderConfig'; payload: RenderPlaneConfig }
+  | { id: ReqId; type: 'renderWindow'; payload: { firstRow: number; lastRow: number } };
 
 export interface WorkerXlsxExportPayload extends WorkerCsvExportPayload {
   sheetName?: string;
@@ -254,7 +329,9 @@ export type DataWorkerResponse =
   | { id: ReqId; type: 'clipboardDeserializeResult'; rows: string[][] }
   | { id: ReqId; type: 'exportCsvResult'; bytes: Uint8Array }
   | { id: ReqId; type: 'exportXlsxResult'; bytes: Uint8Array }
-  | { id: ReqId; type: 'autosizeResult'; widths: Record<string, number> };
+  | { id: ReqId; type: 'autosizeResult'; widths: Record<string, number> }
+  // Render plane (Task 6) — additive; carries the RenderWindowResult payload.
+  | ({ id: ReqId } & RenderWindowResult);
 
 /** Agg func names the worker can run (built-ins only — functions can't
  *  cross the boundary). */
