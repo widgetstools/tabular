@@ -139,6 +139,19 @@ OpenFin window (`npm run openfin:showcase`).
   a results addendum.
 - Existing `test:worker` untouched (compute shared, not duplicated).
 
+## Phase 2 (approved direction): FINOS Perspective engine behind the same seam
+
+After the renderer comparison lands, add a `PerspectiveEngine` option: the
+existing data worker hosts a Perspective (Apache-2.0, C++/WASM) table + view
+in-thread and the render plane materializes text/styles from its windowed
+reads (`view.to_columns({start_row, end_row})`) — same protocol to the UI,
+engine swapped behind the seam. Motivation: hardened incremental
+filter/sort/group/agg (including weighted mean) replacing the custom pipeline;
+known gaps to solve then: AG-style footer-row synthesis (Perspective puts
+aggregates on group headers), tree-path → DisplayedNode mapping, per-cell
+flash direction bookkeeping, ~3-5MB WASM asset. The bench page then compares
+three configurations: canvas+tabular, DOM+tabular, DOM+perspective.
+
 ## Risks (render plane)
 
 - **Async window fetch**: fast scroll outruns the worker round-trip; UI keeps
