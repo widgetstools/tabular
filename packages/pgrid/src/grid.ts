@@ -406,11 +406,16 @@ export class PspGrid {
     // a redundant fetch would queue behind update batches and slow ticks).
     if (force || !sameWindow) rv.requestWindow(v, c);
     const scrollTop = this.scroller.scrollTop;
-    if (!rv.rowMeta(v.anchor) && this.painted) {
-      // The engine hasn't caught up to this window (read in flight): glue the
-      // previously painted pixels to the viewport — they track the scroll 1:1
-      // so fast scrolling shows stale rows instead of a blank pane (the FinOS
-      // datagrid behaves the same mid-fetch). paint() re-syncs on data.
+    // Paints are ATOMIC (regular-table semantics): swap to the new window only
+    // when data covers ALL of it — a partial overlap must not stamp half a
+    // viewport and leave the rest empty. Until then, glue the previously
+    // painted pixels to the viewport — they track the scroll 1:1, so fast
+    // scrolling shows a complete stale window instead of a blank or torn pane.
+    const covered =
+      rowCount > 0 &&
+      !!rv.rowMeta(v.firstRow) &&
+      !!rv.rowMeta(Math.min(v.lastRow, rowCount - 1));
+    if (!covered && rowCount > 0 && this.painted) {
       this.glued = true;
       this.layer.style.transform = `translate3d(0, ${
         this.painted.layerTop + (scrollTop - this.painted.scrollTop)
