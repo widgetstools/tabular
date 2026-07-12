@@ -35,7 +35,9 @@ function makeRows(): Row[] {
     rows.push({
       id: `P${String(i).padStart(5, '0')}`,
       desk: DESKS[i % DESKS.length],
-      ccy: CCYS[(i * 7) % CCYS.length],
+      // Decorrelated from desk (which cycles with i % 6): every desk×ccy
+      // pivot intersection gets rows, so the pivot matrix fills fully.
+      ccy: CCYS[Math.floor(i / DESKS.length) % CCYS.length],
       mv: Math.round((Math.random() * 2_000_000 - 500_000) * 100) / 100,
       px: Math.round((80 + Math.random() * 60) * 100) / 100,
     });
