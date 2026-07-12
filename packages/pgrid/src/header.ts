@@ -149,7 +149,12 @@ export class Header {
         // gracefully instead of aborting.
       }
       const onMove = (mv: PointerEvent): void => {
-        this.cb.onResize(resizeId, Math.max(MIN_COL_W, startW + (mv.clientX - startX)));
+        const w = Math.max(MIN_COL_W, startW + (mv.clientX - startX));
+        // Update this cell in place: the grid deliberately does not re-render
+        // the header mid-drag (a rebuild would destroy the captured handle),
+        // so without this the header drifts out of alignment with the body.
+        cell.style.width = `${w}px`;
+        this.cb.onResize(resizeId, w);
       };
       const onUp = (): void => {
         target.removeEventListener('pointermove', onMove);

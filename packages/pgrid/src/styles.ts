@@ -63,6 +63,7 @@ export function applyTheme(root: HTMLElement, theme: 'dark' | 'light'): void {
 const STYLE_ID = 'pgrid-styles';
 
 const BASE_CSS = `
+.${CLS.root}, .${CLS.root} * { box-sizing: border-box; }
 .${CLS.root} { position: relative; height: 100%; display: flex; flex-direction: column;
   --pg-base: #141414; --pg-raised: #1B1B1B; --pg-text: #F0F0F0; --pg-text-2: #A8A8A8;
   --pg-accent: #81A1C1; --pg-up: #7CB88C; --pg-down: #C87878;
@@ -118,7 +119,8 @@ const BASE_CSS = `
   padding: 0 8px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .${CLS.cell}.${CLS.num} { justify-content: flex-end; font-variant-numeric: tabular-nums; }
 .${CLS.chevron} { position: absolute; top: 0; height: 100%; width: 20px; display: none;
-  align-items: center; justify-content: center; cursor: pointer; }
+  align-items: center; justify-content: center; cursor: pointer;
+  z-index: 1; /* cells are later siblings painting above — keep clicks landing on the chevron */ }
 .${CLS.row}.${CLS.group} > .${CLS.chevron} { display: flex; }
 .${CLS.chevron}::before { content: ''; width: 0; height: 0;
   border-top: 4px solid transparent; border-bottom: 4px solid transparent;
