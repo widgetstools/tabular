@@ -1,119 +1,212 @@
 /**
- * pgrid minimal harness (phase-1 Task 7; fleshed out with the STOMP feed in
- * Task 9). 5k synthetic rows grouped by desk with sum/avg aggregates, and a
- * 50ms mutator batching 100 random rows through `grid.update` — there is NO
- * refresh or polling code here: group sums tick because `view.on_update` is
- * the grid's row model push channel.
+ * PGrid full demo: the complete STOMP positions payload — 20k rows, every
+ * leaf field flattened to a column (~370, union schema over the snapshot) —
+ * with live ticks applied as full-row replacements at ~10k updates/s.
+ *
+ * There is NO refresh or polling code on this page: grouped and pivoted
+ * aggregates tick because `view.on_update` is the grid's row-model push
+ * channel. Uses its own STOMP connection (the shared feed is pinned to 5k).
  */
-import { useEffect, useRef, useState } from 'react';
-import { PspGrid } from 'pgrid';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ColDef, GridOptions, PspGrid } from 'pgrid';
+import { PspGridReact } from 'pgrid/react';
+import { connectFiPositions } from '../stomp/fiPositionsSource';
+import { FeedBadge } from '../stomp/FeedBadge';
+import type { FeedStatus } from '../stomp/sharedFeed';
+import { buildSchema, flatten, type FlatRow } from '../stomp/flattenFi';
 
-const SCHEMA = {
-  id: 'string',
-  desk: 'string',
-  ccy: 'string',
-  mv: 'float',
-  px: 'float',
-} as const;
+const SNAPSHOT_ROWS = 20000;
+const FLATTEN_CHUNK = 2500;
 
-const DESKS = ['Rates', 'Credit', 'FX', 'Equities', 'Munis', 'Agency'];
-const CCYS = ['USD', 'EUR', 'JPY', 'GBP'];
-const ROWS = 5000;
+/** Default aggregations (spec Task 9): sums on the money columns, avgs on the per-unit ones. */
+const AGG: Record<string, 'sum' | 'avg'> = {
+  marketValue: 'sum',
+  pnl: 'sum',
+  dailyPnl: 'sum',
+  currentPrice: 'avg',
+  yield: 'avg',
+};
 
-interface Row {
-  [key: string]: unknown;
-  id: string;
-  desk: string;
-  ccy: string;
-  mv: number;
-  px: number;
+/** Columns pinned to the front of the flat view, in this order. */
+const LEAD = [
+  'positionId',
+  'desk',
+  'currency',
+  'marketValue',
+  'pnl',
+  'dailyPnl',
+  'currentPrice',
+  'yield',
+  'trader',
+  'region',
+  'instrumentType',
+];
+
+function buildColumnDefs(schema: Record<string, string>): ColDef[] {
+  const keys = Object.keys(schema).sort(
+    (a, b) => {
+      const ia = LEAD.indexOf(a);
+      const ib = LEAD.indexOf(b);
+      if (ia !== -1 || ib !== -1) return (ia === -1 ? LEAD.length : ia) - (ib === -1 ? LEAD.length : ib);
+      return a < b ? -1 : a > b ? 1 : 0;
+    },
+  );
+  return keys.map((field) => {
+    const engineType = schema[field];
+    const type =
+      engineType === 'float' ? 'float' : engineType === 'boolean' ? 'boolean' : 'string';
+    return {
+      field,
+      headerName: field,
+      type,
+      width: field === 'positionId' || field === 'cusip' ? 150 : 120,
+      rowGroup: field === 'desk',
+      aggFunc: AGG[field] ?? null,
+      format: type === 'float' ? '#,##0.00' : undefined,
+    } as ColDef;
+  });
 }
 
-function makeRows(): Row[] {
-  const rows: Row[] = [];
-  for (let i = 0; i < ROWS; i++) {
-    rows.push({
-      id: `P${String(i).padStart(5, '0')}`,
-      desk: DESKS[i % DESKS.length],
-      // Decorrelated from desk (which cycles with i % 6): every desk×ccy
-      // pivot intersection gets rows, so the pivot matrix fills fully.
-      ccy: CCYS[Math.floor(i / DESKS.length) % CCYS.length],
-      mv: Math.round((Math.random() * 2_000_000 - 500_000) * 100) / 100,
-      px: Math.round((80 + Math.random() * 60) * 100) / 100,
-    });
-  }
-  return rows;
+type Phase = 'connecting' | 'snapshot' | 'loading' | 'live' | 'offline';
+
+const BADGE_FOR_PHASE: Record<Phase, FeedStatus> = {
+  connecting: 'connecting',
+  snapshot: 'connecting',
+  loading: 'connecting',
+  live: 'ready',
+  offline: 'offline',
+};
+
+interface Meta {
+  schema: Record<string, string>;
+  columnDefs: ColDef[];
+  flatRows: FlatRow[];
 }
 
 export function PGridPage() {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [status, setStatus] = useState('booting engine…');
+  const gridRef = useRef<PspGrid | null>(null);
+  const totalRef = useRef(0);
+  const [phase, setPhase] = useState<Phase>('connecting');
+  const [snapProgress, setSnapProgress] = useState(0);
   const [updates, setUpdates] = useState(0);
+  const [meta, setMeta] = useState<Meta | null>(null);
 
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
     let cancelled = false;
-    let timer: number | undefined;
-    const grid = new PspGrid(el, {
-      rowIdField: 'id',
-      columnDefs: [
-        { field: 'id', headerName: 'Position' },
-        { field: 'desk', headerName: 'Desk', rowGroup: true },
-        { field: 'ccy', headerName: 'Ccy', width: 80 },
-        { field: 'mv', headerName: 'Mkt value', type: 'float', aggFunc: 'sum', format: '#,##0.00', width: 150 },
-        { field: 'px', headerName: 'Price', type: 'float', aggFunc: 'avg', format: '#,##0.00', width: 120 },
-      ],
-      theme: 'dark',
-      groupDefaultExpanded: 0,
-      rowGroupPanelShow: 'always',
-      pivotPanelShow: 'always',
-      sideBar: true,
-    });
-    (async () => {
-      await grid.setSchema(SCHEMA as unknown as Record<string, string>);
-      if (cancelled) return;
-      const rows = makeRows();
-      await grid.load(rows);
-      if (cancelled) return;
-      setStatus(`live — ${ROWS.toLocaleString()} rows, no refresh cadence`);
-      let n = 0;
-      timer = window.setInterval(() => {
-        const batch: Row[] = [];
-        for (let i = 0; i < 100; i++) {
-          const row = rows[Math.floor(Math.random() * rows.length)];
-          row.mv = Math.round((row.mv + (Math.random() - 0.5) * 50_000) * 100) / 100;
-          row.px = Math.round((row.px + (Math.random() - 0.5)) * 100) / 100;
-          batch.push({ ...row });
-        }
-        grid.update(batch);
-        n += 1;
-        if (n % 20 === 0) setUpdates(n * 100);
-      }, 50);
-    })().catch((err) => {
-      console.error(err);
-      setStatus(String(err));
-    });
+    let gotData = false;
+    const offlineTimer = setTimeout(() => {
+      if (!gotData) setPhase('offline');
+    }, 4000);
+
+    const dispose = connectFiPositions(
+      {
+        rows: SNAPSHOT_ROWS,
+        rate: 200,
+        updatesPerTick: 50,
+        clientId: `pgrid-${Math.floor(Math.random() * 1e6)}`,
+      },
+      {
+        onStatus: (text) => {
+          if (
+            !gotData &&
+            (text.startsWith('error') ||
+              text.startsWith('disconnected') ||
+              text.includes('is the server running'))
+          ) {
+            setPhase('offline');
+          }
+        },
+        onSnapshotProgress: (received) => {
+          gotData = true;
+          setPhase((p) => (p === 'connecting' ? 'snapshot' : p));
+          setSnapProgress(received);
+        },
+        onReady: (rows) => {
+          gotData = true;
+          void (async () => {
+            setPhase('loading');
+            // Flatten in chunks, yielding so other pages' feeds stay live.
+            const flatRows: FlatRow[] = new Array<FlatRow>(rows.length);
+            for (let i = 0; i < rows.length; i += FLATTEN_CHUNK) {
+              const end = Math.min(i + FLATTEN_CHUNK, rows.length);
+              for (let j = i; j < end; j++) flatRows[j] = flatten(rows[j]);
+              await new Promise((r) => setTimeout(r));
+              if (cancelled) return;
+            }
+            const schema = buildSchema(flatRows);
+            setMeta({ schema, columnDefs: buildColumnDefs(schema), flatRows });
+          })();
+        },
+        onUpdates: (batch) => {
+          const grid = gridRef.current;
+          if (!grid) return;
+          grid.update(batch.map(flatten));
+          totalRef.current += batch.length;
+        },
+      },
+    );
+
+    const counter = setInterval(() => setUpdates(totalRef.current), 500);
     return () => {
       cancelled = true;
-      if (timer) clearInterval(timer);
-      void grid.destroy();
+      clearTimeout(offlineTimer);
+      clearInterval(counter);
+      dispose();
+      gridRef.current = null;
     };
   }, []);
+
+  const options = useMemo<GridOptions | null>(
+    () =>
+      meta && {
+        columnDefs: meta.columnDefs,
+        rowIdField: 'positionId',
+        theme: 'dark',
+        groupDefaultExpanded: 0,
+        rowGroupPanelShow: 'always',
+        pivotPanelShow: 'always',
+        sideBar: true,
+      },
+    [meta],
+  );
 
   return (
     <main className="page">
       <div className="page-head">
-        <h2>PGrid — Perspective-native DOM grid</h2>
+        <h2>PGrid — Perspective-native DOM grid, full STOMP feed</h2>
         <p>
-          The row model IS a Perspective view: grouping and aggregation run in the engine, and
-          group sums tick push-based via <code>view.on_update</code> — zero polling, zero refresh
-          interval. {status}
-          {updates > 0 ? ` · ${updates.toLocaleString()} row updates applied` : ''}
+          The row model IS a Perspective view: 20k positions × {meta ? meta.columnDefs.length : '~370'}{' '}
+          union-schema columns, grouped by desk, ticking at ~10k updates/s. Group and pivot
+          aggregates tick push-based via <code>view.on_update</code> — zero polling, zero refresh
+          interval anywhere on this page. Drag headers to the group/pivot strips, toggle pivot
+          mode, expand groups mid-stream.
         </p>
       </div>
+      <div className="controls">
+        <FeedBadge status={BADGE_FOR_PHASE[phase]} />
+        <span>
+          {phase === 'snapshot' && `snapshot ${snapProgress.toLocaleString()} rows…`}
+          {phase === 'loading' && 'flattening + loading into the engine…'}
+          {phase === 'live' &&
+            `${SNAPSHOT_ROWS.toLocaleString()} rows · ${meta?.columnDefs.length ?? 0} cols · ${updates.toLocaleString()} row updates applied`}
+          {phase === 'offline' && 'STOMP server offline — run apps/stomp-view-server (ws://localhost:8081)'}
+          {phase === 'connecting' && 'connecting to ws://localhost:8081…'}
+        </span>
+      </div>
       <div className="grid-wrap">
-        <div ref={ref} style={{ height: '100%' }} />
+        {options && meta ? (
+          <PspGridReact
+            options={options}
+            schema={meta.schema}
+            onReady={(grid) => {
+              gridRef.current = grid;
+              void grid
+                .load(meta.flatRows)
+                .then(() => setPhase('live'))
+                .catch((err) => console.error('[pgrid] load failed', err));
+            }}
+          />
+        ) : null}
       </div>
     </main>
   );

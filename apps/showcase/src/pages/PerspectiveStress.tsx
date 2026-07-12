@@ -15,48 +15,10 @@ import { ensurePerspective, perspectiveTheme } from '../perspectiveEngine';
 import { connectFiPositions, type FiPosition } from '../stomp/fiPositionsSource';
 import { FeedBadge } from '../stomp/FeedBadge';
 import type { FeedStatus } from '../stomp/sharedFeed';
+import { buildSchema, flatten, type FlatRow } from '../stomp/flattenFi';
 
 const SNAPSHOT_ROWS = 20000;
 const LOAD_CHUNK = 2500;
-
-type FlatRow = Record<string, string | number | boolean | null>;
-
-function flatten(row: FiPosition): FlatRow {
-  const out: FlatRow = {};
-  const walk = (obj: Record<string, unknown>, prefix: string): void => {
-    for (const [k, v] of Object.entries(obj)) {
-      const key = prefix ? `${prefix}.${k}` : k;
-      if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
-        walk(v as Record<string, unknown>, key);
-      } else if (
-        typeof v === 'string' ||
-        typeof v === 'number' ||
-        typeof v === 'boolean'
-      ) {
-        out[key] = v;
-      } else {
-        out[key] = null;
-      }
-    }
-  };
-  walk(row, '');
-  return out;
-}
-
-/** Union schema over all rows; type conflicts degrade to string. */
-function buildSchema(rows: FlatRow[]): Record<string, string> {
-  const schema: Record<string, string> = {};
-  for (const row of rows) {
-    for (const [k, v] of Object.entries(row)) {
-      if (v === null || schema[k] === 'string') continue;
-      const t =
-        typeof v === 'number' ? 'float' : typeof v === 'boolean' ? 'boolean' : 'string';
-      if (!(k in schema)) schema[k] = t;
-      else if (schema[k] !== t) schema[k] = 'string';
-    }
-  }
-  return schema;
-}
 
 type Phase = 'connecting' | 'snapshot' | 'loading' | 'live' | 'offline';
 
