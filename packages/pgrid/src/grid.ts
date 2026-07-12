@@ -15,6 +15,7 @@ import { Header, colTitle } from './header';
 import type { HeaderCol } from './header';
 import { Materializer, groupLabel } from './materializer';
 import type { RenderView } from './materializer';
+import { Panels } from './panels';
 import { RowPool } from './pool';
 import type { PoolGeometry } from './pool';
 import { applyTheme, ensureStyles, CLS } from './styles';
@@ -42,12 +43,15 @@ interface ColRange {
 }
 
 export class PspGrid {
-  private readonly panelStrip: HTMLDivElement;
+  private readonly panelsEl: HTMLDivElement;
+  private readonly bodyEl: HTMLDivElement;
+  private readonly sidebarEl: HTMLDivElement;
   private readonly headerEl: HTMLDivElement;
   private readonly scroller: HTMLDivElement;
   private readonly spacer: HTMLDivElement;
   private readonly layer: HTMLDivElement;
   private readonly header: Header;
+  private readonly panels: Panels;
   private readonly pool: RowPool;
   private readonly abort = new AbortController();
 
@@ -86,15 +90,29 @@ export class PspGrid {
     this.state = this.deriveState();
     this.cfg = compileView(this.state);
 
-    this.panelStrip = document.createElement('div');
-    this.panelStrip.className = CLS.panel;
-    this.panelStrip.style.display = 'none'; // Task 8 mounts panels here
+    this.panelsEl = document.createElement('div');
     this.headerEl = document.createElement('div');
     this.header = new Header(this.headerEl, {
       onSortClick: (colId, additive) => this.handleSortClick(colId, additive),
       onResize: (colId, w) => this.handleResize(colId, w),
-      onDragStart: () => {}, // Task 8: header→panel chip drag
+      onDragStart: (colId, ev) => this.panels.startHeaderDrag(colId, ev),
     });
+    this.sidebarEl = document.createElement('div');
+    this.panels = new Panels(
+      this.panelsEl,
+      this.sidebarEl,
+      {
+        onGroupChange: (fields) => void this.applyColumnState({ rowGroupCols: fields }),
+        onPivotChange: (fields) => void this.applyColumnState({ pivotCols: fields }),
+        onValueChange: (cols) => void this.applyColumnState({ valueCols: cols }),
+        onPivotMode: (on) => void this.setPivotMode(on),
+      },
+      {
+        groupPanel: options.rowGroupPanelShow === 'always',
+        pivotPanel: options.pivotPanelShow === 'always',
+        sideBar: options.sideBar ?? false,
+      },
+    );
     this.scroller = document.createElement('div');
     this.scroller.className = CLS.scroller;
     this.spacer = document.createElement('div');
@@ -102,7 +120,15 @@ export class PspGrid {
     this.layer = document.createElement('div');
     this.layer.className = CLS.layer;
     this.scroller.append(this.spacer, this.layer);
-    root.append(this.panelStrip, this.headerEl, this.scroller);
+    // panels strip on top; below it the header+scroller column with the
+    // columns sidebar to its right.
+    const main = document.createElement('div');
+    main.style.cssText = 'display:flex;flex-direction:column;flex:1;min-width:0;';
+    main.append(this.headerEl, this.scroller);
+    this.bodyEl = document.createElement('div');
+    this.bodyEl.style.cssText = 'display:flex;flex:1;min-height:0;';
+    this.bodyEl.append(main, this.sidebarEl);
+    root.append(this.panelsEl, this.bodyEl);
     this.pool = new RowPool(this.layer);
 
     const signal = this.abort.signal;
@@ -147,6 +173,7 @@ export class PspGrid {
     this.rv = this.makeRenderView(mat);
     this.rebuildColumns();
     this.header.render(this.state, this.displayCols, this.cfg);
+    this.panels.render(this.state);
     this.sync(true);
     this.emit('ready');
   }
@@ -185,6 +212,7 @@ export class PspGrid {
     }
     this.rebuildColumns();
     this.header.render(this.state, this.displayCols, this.cfg);
+    this.panels.render(this.state);
     this.sync(true);
     this.emit('column-state-changed');
   }
@@ -216,9 +244,8 @@ export class PspGrid {
     this.pool.clear();
     // Remove only elements this instance created — the root may already host a
     // successor grid (React StrictMode double-mount).
-    this.panelStrip.remove();
-    this.headerEl.remove();
-    this.scroller.remove();
+    this.panelsEl.remove();
+    this.bodyEl.remove();
     this.root.classList.remove(CLS.root);
     const host = this.host;
     const table = this.table;

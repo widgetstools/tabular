@@ -141,7 +141,13 @@ export class Header {
       const startX = ev.clientX;
       const startW = cell.offsetWidth;
       this.resizing = true;
-      target.setPointerCapture(ev.pointerId);
+      try {
+        target.setPointerCapture(ev.pointerId);
+      } catch {
+        // Pointer already lifted (touch race / synthetic events): move events
+        // still reach the handle unmoved under the pointer, so resize degrades
+        // gracefully instead of aborting.
+      }
       const onMove = (mv: PointerEvent): void => {
         this.cb.onResize(resizeId, Math.max(MIN_COL_W, startW + (mv.clientX - startX)));
       };

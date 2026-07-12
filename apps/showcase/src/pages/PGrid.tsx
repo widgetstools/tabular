@@ -64,6 +64,9 @@ export function PGridPage() {
       ],
       theme: 'dark',
       groupDefaultExpanded: 0,
+      rowGroupPanelShow: 'always',
+      pivotPanelShow: 'always',
+      sideBar: true,
     });
     (async () => {
       await grid.setSchema(SCHEMA as unknown as Record<string, string>);

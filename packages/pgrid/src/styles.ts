@@ -27,6 +27,8 @@ export const CLS = {
   sortAsc: 'pg-sort-asc',
   sortDesc: 'pg-sort-desc',
   sidebar: 'pg-sidebar',
+  sidebarRow: 'pg-sidebar-row',
+  toggle: 'pg-toggle',
 } as const;
 
 /** Color tokens per theme; geometry/font vars live as dark-independent defaults on `.pg-root`. */
@@ -92,8 +94,18 @@ const BASE_CSS = `
 .${CLS.chip} > button { border: none; background: none; color: var(--pg-text-2);
   cursor: pointer; padding: 0; font: inherit; line-height: 1; }
 .${CLS.chip} > button:hover { color: var(--pg-text); }
+.${CLS.chip}[data-ghost="1"] { position: fixed; pointer-events: none; opacity: 0.85; z-index: 1000; }
+.${CLS.panel}[data-drop="1"] { outline: 1px dashed var(--pg-accent); outline-offset: -2px; }
 .${CLS.sidebar} { flex: none; width: 200px; overflow: auto; background: var(--pg-raised);
   border-left: 1px solid var(--pg-gridline); }
+.${CLS.sidebarRow} { display: flex; align-items: center; gap: 4px; padding: 3px 8px;
+  border-bottom: 1px solid var(--pg-gridline); }
+.${CLS.sidebarRow} > span { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.${CLS.toggle} { flex: none; width: 18px; height: 18px; padding: 0; font-size: 10px; line-height: 1;
+  border: 1px solid var(--pg-gridline); border-radius: 2px; background: none;
+  color: var(--pg-text-2); cursor: pointer; }
+.${CLS.toggle}[data-on="1"] { border-color: var(--pg-accent); color: var(--pg-accent); }
+.${CLS.toggle}:disabled { opacity: 0.35; cursor: default; }
 .${CLS.scroller} { flex: 1; overflow: auto; position: relative; }
 .${CLS.spacer} { position: absolute; top: 0; left: 0; width: 1px; visibility: hidden; }
 .${CLS.layer} { position: absolute; top: 0; left: 0; }
