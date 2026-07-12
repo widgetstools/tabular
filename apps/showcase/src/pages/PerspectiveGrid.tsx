@@ -6,32 +6,12 @@
  * (Perspective would otherwise infer ~1500 columns from the wide FI payload).
  */
 import { useEffect, useRef, useState } from 'react';
-import perspective from '@finos/perspective';
-import type { Client, Table } from '@finos/perspective';
-import perspective_viewer from '@finos/perspective-viewer';
+import type { Table } from '@finos/perspective';
 import type { HTMLPerspectiveViewerElement } from '@finos/perspective-viewer';
-import '@finos/perspective-viewer-datagrid';
-import '@finos/perspective-viewer/dist/css/themes.css';
-import SERVER_WASM from '@finos/perspective/dist/wasm/perspective-server.wasm?url';
-import CLIENT_WASM from '@finos/perspective-viewer/dist/wasm/perspective-viewer.wasm?url';
+import { ensurePerspective, perspectiveTheme } from '../perspectiveEngine';
 import type { FiPosition } from '../stomp/fiPositionsSource';
 import { useFiFeed, useFiUpdates } from '../stomp/sharedFeed';
 import { FeedBadge } from '../stomp/FeedBadge';
-
-// WASM engines load once per session; pages remount on every nav.
-let clientPromise: Promise<Client> | null = null;
-function ensurePerspective(): Promise<Client> {
-  if (!clientPromise) {
-    clientPromise = (async () => {
-      await Promise.all([
-        perspective.init_server(fetch(SERVER_WASM)),
-        perspective_viewer.init_client(fetch(CLIENT_WASM)),
-      ]);
-      return perspective.worker();
-    })();
-  }
-  return clientPromise;
-}
 
 const SCHEMA = {
   positionId: 'string',
@@ -144,10 +124,7 @@ export function PerspectiveGridPage() {
       viewer.style.flex = '1';
       container.appendChild(viewer);
       await viewer.load(table);
-      await viewer.restore({
-        ...DEFAULT_VIEW,
-        theme: document.body.classList.contains('light') ? 'Pro' : 'Pro Dark',
-      });
+      await viewer.restore({ ...DEFAULT_VIEW, theme: perspectiveTheme() });
       if (!cancelled) {
         tableRef.current = table;
         viewerRef.current = viewer;
