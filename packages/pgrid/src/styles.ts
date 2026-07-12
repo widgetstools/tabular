@@ -109,11 +109,15 @@ const BASE_CSS = `
 .${CLS.toggle}:disabled { opacity: 0.35; cursor: default; }
 .${CLS.scroller} { flex: 1; overflow: auto; position: relative; }
 .${CLS.spacer} { position: absolute; top: 0; left: 0; width: 1px; visibility: hidden; }
-.${CLS.layer} { position: sticky; top: 0; left: 0; height: 0; overflow: visible;
-  z-index: 1; will-change: transform;
-  /* Sticky = compositor-pinned: async (wheel/momentum) scrolling cannot move
-     painted rows before the main-thread sync runs — the structural fix for
-     scroll flicker/blank; regular-table clip-pins its table the same way. */ }
+.${CLS.layer} { position: absolute; top: 0; left: 0; }
+.${CLS.scroller}::-webkit-scrollbar, .${CLS.scroller}::-webkit-scrollbar-corner {
+  background: transparent; width: 12px; height: 12px;
+  /* Styled scrollbars are ALWAYS visible on macOS (overlay scrollbars are
+     replaced) and give classic track-click paging — regular-table's look. */ }
+.${CLS.scroller}::-webkit-scrollbar-thumb { background: var(--pg-text-2);
+  background-clip: content-box; border: 4px solid transparent; border-radius: 6px;
+  min-height: 10%; min-width: 10%; }
+.${CLS.scroller}::-webkit-scrollbar-thumb:hover { background-color: var(--pg-text); }
 .${CLS.row} { position: absolute; left: 0; height: var(--pg-row-h);
   border-bottom: 1px solid var(--pg-gridline); will-change: transform; contain: strict; }
 .${CLS.row}[data-odd="1"] { background: var(--pg-raised); }
