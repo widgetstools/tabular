@@ -74,9 +74,9 @@ export class PspGrid {
 
   private lastV: Viewport | null = null;
   private lastC: ColRange | null = null;
-  /** Layer placement of the last data-backed paint; anchors the stale-pixel glue. */
-  private painted: { scrollTop: number; layerTop: number } | null = null;
-  /** True while stale pixels are glued to the viewport (window read in flight). */
+  /** Last written layer position + painted row count; anchors stale-pixel handling. */
+  private painted: { layerY: number; rows: number } | null = null;
+  /** True while stale pixels are shown for an in-flight window read. */
   private glued = false;
   private poolAllocSize = -1;
   private poolAllocCols = -1;
@@ -416,10 +416,22 @@ export class PspGrid {
       !!rv.rowMeta(v.firstRow) &&
       !!rv.rowMeta(Math.min(v.lastRow, rowCount - 1));
     if (!covered && rowCount > 0 && this.painted) {
+      // Stale rows scroll natively at their true content coordinates (the
+      // eventual swap lands on identical coordinates — no jump). When the
+      // viewport reaches the stale window's edge, PIN that edge to the
+      // viewport edge: the clamp is continuous at the boundary, so content
+      // never moves backward (no rubberband) and the pane never blanks.
       this.glued = true;
-      this.layer.style.transform = `translate3d(0, ${
-        this.painted.layerTop + (scrollTop - this.painted.scrollTop)
-      }px, 0)`;
+      const { layerY, rows } = this.painted;
+      const rowsPx = rows * ROW_H;
+      const y =
+        rowsPx >= clipH
+          ? Math.min(Math.max(layerY, scrollTop + clipH - rowsPx), scrollTop)
+          : scrollTop;
+      if (y !== layerY) {
+        this.painted = { layerY: y, rows };
+        this.layer.style.transform = `translate3d(0, ${y}px, 0)`;
+      }
       return;
     }
     this.glued = false;
@@ -428,7 +440,7 @@ export class PspGrid {
     // never reaches element coordinates and sub-row scrolls are one CSS write.
     const layerTop = scrollTop - (v.anchor - v.firstRow) * ROW_H - v.subCellPx;
     this.layer.style.transform = `translate3d(0, ${layerTop}px, 0)`;
-    this.painted = { scrollTop, layerTop };
+    this.painted = { layerY: layerTop, rows: v.lastRow - v.firstRow + 1 };
     if (!force && sameWindow) return; // geometry-only scroll: rows already stamped
     const size = poolSize(clipH, ROW_H, rowCount);
     const colCount = Math.max(0, c.lastCol - c.firstCol + 1);
