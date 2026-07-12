@@ -22,6 +22,7 @@ Each task below is sized for one working session. Session protocol:
 | Date | Task | Result | Notes / deviations |
 |---|---|---|---|
 | _(append rows here)_ | | | |
+| 2026-07-12 | Task 3 | ✅ `pgrid-view-compiler OK`, `tsc -p packages/pgrid` + full `npm run typecheck` green, commit `cada2e3` | No deviations — direct mapping as planned; test passed on first run after implementation. Two unstated details made explicit: (1) unknown filter ops **throw** rather than being silently dropped (a dropped filter would render wrong data); (2) `columns` uses value fields when `group_by` **or** `split_by` is nonempty (pivot-only views are aggregated too), matching the test's grouped/flat split. |
 | 2026-07-12 | Task 2 | ✅ `pgrid-window-math OK`, `tsc -p packages/pgrid` + full `npm run typecheck` green, commit `6afb126` | No deviations — test and math implemented exactly as planned; test passed on first run after implementation. One unstated detail made explicit: the plan leaves the `overscan` default unspecified, so a single `DEFAULT_OVERSCAN = 4` is shared by `computeViewport`, `poolSize`, and `visibleCols` — viewport and pool sizing must agree on overscan or `poolSlot` collides when callers omit it. |
 | 2026-07-11 | Task 1 | ✅ `pgrid-engine OK`, typecheck green, commit `06e0e70` | Two deviations. (1) The `node` entry of `@finos/perspective@3.8.0` has **no `worker()` factory** — it boots the engine in-process via top-level await at import and default-exports a module-level client facade (`{table, websocket, system_info, ...}`); `ensureEngine`'s node branch returns that default cast as `Client` (structurally sufficient — we only call `.table`). Browser branch unchanged (tsc under `moduleResolution: bundler` resolves browser types, so `worker`/`init_client`/`init_server` typecheck natively; no `vite-env.d.ts` needed — `as string` on the `?url` specifiers suffices). (2) Test script: `scripts/` is CJS-scoped (root package.json lacks `"type": "module"`) and perspective's ESM node entry can't be CJS-transformed (top-level await), so the plan's top-level-await test body is wrapped in `main()` and the engine module loaded via native dynamic `import()`. Same file name, same run command, same assertions. |
 
@@ -264,7 +265,7 @@ export function splitPath(path: string, cfg: PspViewConfig): { groups: string[];
 export const META_COLUMN_RE: RegExp;      // /^__(?:ROW_PATH(?:_\d+)?|ID|GROUPING_ID)__$/
 ```
 
-- [ ] **Step 1: Write the failing test** — `scripts/pgrid-view-compiler.ts`:
+- [x] **Step 1: Write the failing test** — `scripts/pgrid-view-compiler.ts`:
 
 ```ts
 import assert from 'node:assert/strict';
@@ -308,10 +309,10 @@ assert.ok(!META_COLUMN_RE.test('desk'));
 console.log('pgrid-view-compiler OK');
 ```
 
-- [ ] **Step 2: Run — expect FAIL.**
-- [ ] **Step 3: Implement.** Direct mapping; sort tuples pass through only for columns present in `columns` (grouped views sort on aggregates — engine handles it); filterModel ops map 1:1 for `== != < <= > >= contains`, `isNull → [field, 'is null']` (two-element). `isEquivalent` = `JSON.stringify(a) === JSON.stringify(b)` with key-sorted aggregates/filter normalization (implement a small `normalize(cfg)` that sorts aggregate keys and filter rows).
-- [ ] **Step 4: Run — expect OK; typecheck.**
-- [ ] **Step 5: Commit** — `git commit -m "feat(pgrid): GridState→view compiler with equivalence fast-path"`.
+- [x] **Step 2: Run — expect FAIL.**
+- [x] **Step 3: Implement.** Direct mapping; sort tuples pass through only for columns present in `columns` (grouped views sort on aggregates — engine handles it); filterModel ops map 1:1 for `== != < <= > >= contains`, `isNull → [field, 'is null']` (two-element). `isEquivalent` = `JSON.stringify(a) === JSON.stringify(b)` with key-sorted aggregates/filter normalization (implement a small `normalize(cfg)` that sorts aggregate keys and filter rows).
+- [x] **Step 4: Run — expect OK; typecheck.**
+- [x] **Step 5: Commit** — `git commit -m "feat(pgrid): GridState→view compiler with equivalence fast-path"`.
 
 ---
 
