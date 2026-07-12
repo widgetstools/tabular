@@ -6,6 +6,10 @@ import { StompConnection } from "./stomp/connection.js";
 
 export async function startServer(config: AppConfig): Promise<void> {
   const clients = new Map<number, StompConnection>();
+  // Monotonic id — Date.now() collides for same-millisecond connections
+  // (e.g. React StrictMode double-mounts), and a colliding close deletes
+  // the survivor's map entry, silently killing its live-update interval.
+  let nextClientId = Date.now();
 
   const httpServer = http.createServer((req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -73,7 +77,7 @@ export async function startServer(config: AppConfig): Promise<void> {
   const wss = new WebSocketServer({ server: httpServer });
 
   wss.on("connection", (ws, req) => {
-    const clientId = Date.now();
+    const clientId = ++nextClientId;
     console.log(
       `[stomp-view-server] WebSocket connected → client id ${clientId} from ${req.socket.remoteAddress ?? "?"}`,
     );
