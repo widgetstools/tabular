@@ -77,19 +77,20 @@ export class RowPool {
 
   /**
    * Stamps every slot for the window in `v`. Rows whose data is still in
-   * flight keep their previous pixels (repositioned) if they remain inside the
-   * window, and hide otherwise; slots outside the window hide and unbind.
+   * flight keep their previous pixels (stale rows beat a blank viewport while
+   * a saturated engine catches up — the FinOS datagrid equivalently shows the
+   * stale window mid-fetch); once the frame is complete, slots outside the
+   * window hide and unbind.
    */
   bindWindow(v: Viewport, view: RenderView, geo: PoolGeometry): void {
+    let inFlight = 0;
     for (let r = v.firstRow; r <= v.lastRow; r++) {
       const slot = this.slots[poolSlot(r, this.size)];
       if (!slot) continue;
       const meta = view.rowMeta(r);
       if (!meta) {
-        if (slot.boundRow < v.firstRow || slot.boundRow > v.lastRow) {
-          slot.el.style.display = 'none';
-          slot.boundRow = -1;
-        } else {
+        inFlight++;
+        if (slot.boundRow >= v.firstRow && slot.boundRow <= v.lastRow) {
           // Keep stale pixels but at the row's current window-relative y.
           this.place(slot.el, slot.boundRow, v, geo);
         }
@@ -115,10 +116,14 @@ export class RowPool {
       }
       slot.boundRow = r;
     }
-    for (const slot of this.slots) {
-      if (slot.boundRow !== -1 && (slot.boundRow < v.firstRow || slot.boundRow > v.lastRow)) {
-        slot.el.style.display = 'none';
-        slot.boundRow = -1;
+    // Hide out-of-window slots only when the frame is complete — during an
+    // in-flight read they are the stale pixels keeping the viewport non-blank.
+    if (inFlight === 0) {
+      for (const slot of this.slots) {
+        if (slot.boundRow !== -1 && (slot.boundRow < v.firstRow || slot.boundRow > v.lastRow)) {
+          slot.el.style.display = 'none';
+          slot.boundRow = -1;
+        }
       }
     }
   }

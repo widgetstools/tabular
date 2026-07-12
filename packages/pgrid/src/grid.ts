@@ -74,6 +74,10 @@ export class PspGrid {
 
   private lastV: Viewport | null = null;
   private lastC: ColRange | null = null;
+  /** Layer placement of the last data-backed paint; anchors the stale-pixel glue. */
+  private painted: { scrollTop: number; layerTop: number } | null = null;
+  /** True while stale pixels are glued to the viewport (window read in flight). */
+  private glued = false;
   private poolAllocSize = -1;
   private poolAllocCols = -1;
   private raf: number | null = null;
@@ -401,12 +405,25 @@ export class PspGrid {
     }
     this.lastV = v;
     this.lastC = c;
+    rv.requestWindow(v, c);
+    const scrollTop = this.scroller.scrollTop;
+    if (!rv.rowMeta(v.anchor) && this.painted) {
+      // The engine hasn't caught up to this window (read in flight): glue the
+      // previously painted pixels to the viewport — they track the scroll 1:1
+      // so fast scrolling shows stale rows instead of a blank pane (the FinOS
+      // datagrid behaves the same mid-fetch). paint() re-syncs on data.
+      this.glued = true;
+      this.layer.style.transform = `translate3d(0, ${
+        this.painted.layerTop + (scrollTop - this.painted.scrollTop)
+      }px, 0)`;
+      return;
+    }
+    this.glued = false;
     // The layer sits at the window top; rows inside are window-relative, so
     // the 10M-px clamp never reaches element coordinates.
-    this.layer.style.transform = `translate3d(0, ${
-      this.scroller.scrollTop - (v.anchor - v.firstRow) * ROW_H
-    }px, 0)`;
-    rv.requestWindow(v, c);
+    const layerTop = scrollTop - (v.anchor - v.firstRow) * ROW_H;
+    this.layer.style.transform = `translate3d(0, ${layerTop}px, 0)`;
+    this.painted = { scrollTop, layerTop };
     const size = poolSize(clipH, ROW_H, rowCount);
     const colCount = Math.max(0, c.lastCol - c.firstCol + 1);
     if (size !== this.poolAllocSize || colCount !== this.poolAllocCols) {
@@ -441,7 +458,15 @@ export class PspGrid {
 
   /** New materializer frame → rebind the stamped window. */
   private paint(): void {
-    if (!this.destroyed && this.lastV && this.lastC) this.bind(this.lastV, this.lastC);
+    if (!this.destroyed && this.lastV && this.lastC) {
+      if (this.glued) {
+        // Fresh data after a glued scroll: recompute layer placement for the
+        // CURRENT scroll position and stamp (sync re-requests if it moved on).
+        this.sync(true);
+      } else {
+        this.bind(this.lastV, this.lastC);
+      }
+    }
     for (const w of this.frameWaiters.splice(0)) w();
   }
 
