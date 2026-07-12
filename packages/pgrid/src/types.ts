@@ -24,6 +24,22 @@ export interface ColDef {
   pinned?: 'left' | 'right' | null;
 }
 
+/** Constructor options (spec §3, ag-grid style). */
+export interface GridOptions {
+  columnDefs: ColDef[];
+  defaultColDef?: Partial<ColDef>;
+  /** Perspective table index column (required): rows sharing it replace in place. */
+  rowIdField: string;
+  pivotMode?: boolean;
+  rowGroupPanelShow?: 'always' | 'never';
+  pivotPanelShow?: 'always' | 'never';
+  /** Columns side panel. */
+  sideBar?: boolean;
+  theme?: 'dark' | 'light';
+  /** Group levels expanded after every (re)build via `set_depth`; -1 = all. */
+  groupDefaultExpanded?: number;
+}
+
 /** Complete, serializable grid state; compiles to a single Perspective view config. */
 export interface GridState {
   columnDefs: ColDef[];

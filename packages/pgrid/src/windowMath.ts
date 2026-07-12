@@ -19,6 +19,12 @@ export interface Viewport {
   lastRow: number;
   /** Fractional part of the anchor row, in px — applied as a CSS transform on the row layer. */
   subCellPx: number;
+  /**
+   * Floored anchor row (the row whose top sits at `scrollTop - subCellPx`).
+   * Lets the grid place the row layer as `scrollTop - (anchor - firstRow) *
+   * rowHeight` without re-deriving the percent mapping.
+   */
+  anchor: number;
 }
 
 /** Spacer height for rowCount rows: exact until it would exceed MAX_PANEL_PX, clamped after. */
@@ -39,7 +45,7 @@ export function computeViewport(
   rowHeight: number,
   overscan: number = DEFAULT_OVERSCAN,
 ): Viewport {
-  if (rowCount <= 0) return { firstRow: 0, lastRow: -1, subCellPx: 0 };
+  if (rowCount <= 0) return { firstRow: 0, lastRow: -1, subCellPx: 0, anchor: 0 };
   const top = Math.max(0, Math.min(scrollTop, panelH - clipH));
   let anchorFloat: number;
   if (rowCount * rowHeight <= panelH) {
@@ -49,9 +55,10 @@ export function computeViewport(
     const percent = scrollable > 0 ? top / scrollable : 0;
     anchorFloat = percent * (rowCount - clipH / rowHeight);
   }
-  const firstRow = Math.max(0, Math.floor(anchorFloat) - overscan);
+  const anchor = Math.min(rowCount - 1, Math.max(0, Math.floor(anchorFloat)));
+  const firstRow = Math.max(0, anchor - overscan);
   const lastRow = Math.min(rowCount - 1, firstRow + Math.ceil(clipH / rowHeight) + 2 * overscan);
-  return { firstRow, lastRow, subCellPx: (anchorFloat % 1) * rowHeight };
+  return { firstRow, lastRow, subCellPx: (anchorFloat % 1) * rowHeight, anchor };
 }
 
 /** Slot count that covers any window computeViewport can produce with the same inputs. */
