@@ -42,8 +42,27 @@ and the STOMP datasource migration. Newest first. Remove entries when fixed.
 
 ## Earlier (see also docs/superpowers/specs/2026-07-11-dom-renderer-design.md follow-ups)
 
-7. Core worker `pendingTx` drop on rebuild + `dataOnly` aggregate gaps
-   (tracked; affects canvas and @tabular/dom identically).
+7. **Grouped totals/subtotals frozen while leaves tick — USER-REPORTED,
+   root cause suspected, not yet fixed.** Symptom: with row grouping on and
+   the STOMP feed ticking, leaf cells update but group/grand totals never
+   recalculate. Suspected mechanism (from the 2026-07-11 data-plane review,
+   consistent with STOMP's full-row updates): in
+   `packages/core/src/worker/pipeline.ts` (~98-109 decision; predicates
+   ~317-358), `canUseIncrementalAgg` requires ALL changed fields ∈
+   aggInputFields while `canSkipModelRebuild` only checks pipelineFields —
+   a mixed-field update (STOMP rows carry ~1500 fields) fails the first,
+   passes the second → `dataOnly` → store updated, aggregates never
+   recomputed. Pivot ticks fall in the same hole (incremental hard-off for
+   pivot). Fix direction: any-changed-field ∈ aggInputFields → incremental
+   agg (verify the engine's accSub(old)/accAdd(new) is per-row and doesn't
+   actually need the ALL-fields restriction); pivot+agg-field → full
+   rebuild; then dataOnly. Also check canvas main-mode `reaggregateLive`
+   trigger conditions and @tabular/dom main mode (known not to reaggregate).
+   Repro: showcase Row grouping page with `npm run dev:stomp` running.
+   Note: `npm run test:worker` gate may still crash on the dataOnly result
+   kind (worker-budget.ts) — fix or update harness alongside.
+   Also related: core worker `pendingTx` drop on rebuild (tracked; affects
+   canvas and @tabular/dom identically).
 8. Editing: editors anchor by display index — model refresh while an editor
    is open commits into the wrong row (why the STOMP Editing page defaults
    live updates OFF).
