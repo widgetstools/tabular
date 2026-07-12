@@ -6,6 +6,7 @@
 import { AGG_FUNCS } from '../../aggregation';
 import { pivotResultColId } from '../../pivot';
 import { workerGroupKey, type WorkerAggFuncName } from '../protocol';
+import { readField } from '../fieldRead';
 
 export interface WorkerPivotCol {
   colId: string;
@@ -32,7 +33,7 @@ function rowMatchesPivotKeys(
   pivotKeys: string[],
 ): boolean {
   for (let level = 0; level < pivotCols.length; level++) {
-    if (workerGroupKey(row[pivotCols[level]!.field]) !== pivotKeys[level]) return false;
+    if (workerGroupKey(readField(row, pivotCols[level]!.field)) !== pivotKeys[level]) return false;
   }
   return true;
 }
@@ -52,7 +53,7 @@ export class PivotPass {
     for (const id of ids) {
       const row = readRow(id);
       if (!row) continue;
-      const path = pivotCols.map((c) => workerGroupKey(row[c.field]));
+      const path = pivotCols.map((c) => workerGroupKey(readField(row, c.field)));
       const key = path.map((k) => encodeURIComponent(k)).join('|');
       if (!seen.has(key)) {
         seen.add(key);
@@ -94,8 +95,8 @@ export class PivotPass {
             for (const rowId of n.leafIds) {
               const row = readRow(rowId);
               if (!row || !rowMatchesPivotKeys(row, pivotCols, path)) continue;
-              values.push(row[agg.field]);
-              if (agg.weightField) weights.push(row[agg.weightField]);
+              values.push(readField(row, agg.field));
+              if (agg.weightField) weights.push(readField(row, agg.weightField));
             }
             for (const ch of n.children) collect(ch);
           };
@@ -135,8 +136,8 @@ export class PivotPass {
             for (const rowId of n.leafIds) {
               const row = readRow(rowId);
               if (!row || !rowMatchesPivotKeys(row, pivotCols, path)) continue;
-              values.push(row[agg.field]);
-              if (agg.weightField) weights.push(row[agg.weightField]);
+              values.push(readField(row, agg.field));
+              if (agg.weightField) weights.push(readField(row, agg.weightField));
             }
             collect(n.children);
           }

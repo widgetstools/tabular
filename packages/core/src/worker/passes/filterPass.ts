@@ -6,6 +6,7 @@
 import type { ColumnFilter, FilterModel } from '../../types';
 import { passesFilter } from '../../filters';
 import type { RowStore } from '../rowStore';
+import { readField } from '../fieldRead';
 
 export interface WorkerFilterCol {
   colId: string;
@@ -38,7 +39,7 @@ export class FilterPass {
       if (!row) continue;
       let pass = true;
       for (const { col, f } of filters) {
-        if (!passesFilter(row[col.field], f)) {
+        if (!passesFilter(readField(row, col.field), f)) {
           pass = false;
           break;
         }
@@ -49,7 +50,7 @@ export class FilterPass {
         for (const token of this.quickTerms) {
           let tokenHit = false;
           for (const col of this.cols) {
-            const v = row[col.field];
+            const v = readField(row, col.field);
             if (v != null && String(v).toLowerCase().includes(token)) {
               tokenHit = true;
               break;

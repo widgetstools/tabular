@@ -14,6 +14,7 @@ import type {
   GroupAggUpdate,
 } from './protocol';
 import { workerGroupKey } from './protocol';
+import { readField } from './fieldRead';
 
 interface ColAcc {
   sum: number;
@@ -111,7 +112,7 @@ export class AggEngine {
     const out: string[] = [];
     let path = '';
     for (const spec of this.model.groupCols) {
-      const key = workerGroupKey(row[spec.field]);
+      const key = workerGroupKey(readField(row, spec.field));
       path = path ? `${path}/${key}` : key;
       out.push(`g:${spec.colId}:${path}`);
     }
@@ -196,7 +197,7 @@ export class AggEngine {
         let m = spec.aggFunc === 'min' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
         let any = false;
         for (const id of node.members) {
-          const v = this.rows.get(id)?.[spec.field];
+          const v = readField(this.rows.get(id), spec.field);
           if (typeof v === 'number' && !Number.isNaN(v)) {
             m = spec.aggFunc === 'min' ? Math.min(m, v) : Math.max(m, v);
             any = true;
@@ -213,19 +214,19 @@ export class AggEngine {
           lastId = id;
         }
         const id = spec.aggFunc === 'first' ? firstId : lastId;
-        return id !== null ? (this.rows.get(id)?.[spec.field] ?? null) : null;
+        return id !== null ? (readField(this.rows.get(id), spec.field) ?? null) : null;
       }
     }
   }
 }
 
 function accAdd(acc: ColAcc, agg: AggWorkerAggCol, row: Row): void {
-  const v = row[agg.field];
+  const v = readField(row, agg.field);
   if (typeof v === 'number' && !Number.isNaN(v)) {
     acc.sum += v;
     acc.numCount++;
     if (agg.weightField) {
-      const w = row[agg.weightField];
+      const w = readField(row, agg.weightField);
       if (typeof w === 'number' && !Number.isNaN(w)) {
         acc.wNum += v * w;
         acc.wDen += w;
@@ -235,12 +236,12 @@ function accAdd(acc: ColAcc, agg: AggWorkerAggCol, row: Row): void {
 }
 
 function accSub(acc: ColAcc, agg: AggWorkerAggCol, row: Row): void {
-  const v = row[agg.field];
+  const v = readField(row, agg.field);
   if (typeof v === 'number' && !Number.isNaN(v)) {
     acc.sum -= v;
     acc.numCount--;
     if (agg.weightField) {
-      const w = row[agg.weightField];
+      const w = readField(row, agg.weightField);
       if (typeof w === 'number' && !Number.isNaN(w)) {
         acc.wNum -= v * w;
         acc.wDen -= w;

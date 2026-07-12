@@ -4,6 +4,7 @@
  */
 import type { SortModelItem } from '../../types';
 import type { RowStore } from '../rowStore';
+import { readField } from '../fieldRead';
 
 export interface WorkerSortCol {
   colId: string;
@@ -46,7 +47,7 @@ export class SortPass {
       const rowB = rowOf(idB);
       if (!rowA || !rowB) return 0;
       for (const { col, dir } of sortCols) {
-        const cmp = compareField(rowA[col.field], rowB[col.field], col.type);
+        const cmp = compareField(readField(rowA, col.field), readField(rowB, col.field), col.type);
         if (cmp !== 0) return cmp * dir;
       }
       return (orderIndex.get(idA) ?? 0) - (orderIndex.get(idB) ?? 0);

@@ -12,6 +12,7 @@ import type { CompiledFormat } from '@tabular/format';
 import type { CellStyle } from '../types';
 import type { DataPipeline } from './pipeline';
 import type { RenderPlaneConfig, WorkerDisplayEntry } from './protocol';
+import { readField } from './fieldRead';
 
 /** Max distinct styles the table holds before LRU eviction kicks in. */
 const STYLE_TABLE_CAP = 1024;
@@ -349,7 +350,7 @@ export class RenderPlane {
       return { text: this.format(col, value), style };
     }
 
-    const value = row ? row[col.field] : undefined;
+    const value = row ? readField(row, col.field) : undefined;
     return { text: this.format(col, value), style };
   }
 

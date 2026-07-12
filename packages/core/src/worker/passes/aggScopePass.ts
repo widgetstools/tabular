@@ -4,6 +4,7 @@
  */
 import type { AggSpec, AggScope } from '@tabular/calc';
 import { AGG_FUNCS } from '../../aggregation';
+import { readField } from '../fieldRead';
 
 const FN_MAP: Record<string, keyof typeof AGG_FUNCS> = {
   SUM: 'sum',
@@ -54,7 +55,7 @@ function promoteScope(scope: AggScope, groupingActive: boolean): AggScope['kind'
 }
 
 function fieldValue(row: Record<string, unknown>, colId: string): unknown {
-  return row[colId];
+  return readField(row, colId);
 }
 
 export interface GroupRowIndex {
@@ -86,7 +87,7 @@ export function buildGroupRowIndex(
     let parentId: string | null = null;
     for (let level = 0; level < groupCols.length; level++) {
       const spec = groupCols[level]!;
-      const key = String(row[spec.field] ?? '(Blank)');
+      const key = String(readField(row, spec.field) ?? '(Blank)');
       const path = parentPath ? `${parentPath}/${key}` : key;
       const id = `g:${spec.colId}:${path}`;
       if (level === groupCols.length - 1) {

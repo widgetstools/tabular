@@ -6,6 +6,7 @@
 import { AGG_FUNCS, type AggFuncName } from '../../aggregation';
 import { workerGroupKey } from '../protocol';
 import type { RowStore } from '../rowStore';
+import { readField } from '../fieldRead';
 
 export interface WorkerGroupCol {
   colId: string;
@@ -134,7 +135,7 @@ export class GroupPass {
 
       for (let level = 0; level < groupCols.length; level++) {
         const spec = groupCols[level];
-        const key = workerGroupKey(row[spec.field]);
+        const key = workerGroupKey(readField(row, spec.field));
         path = path ? `${path}/${key}` : key;
         const id = `g:${spec.colId}:${path}`;
 
@@ -192,8 +193,8 @@ export class GroupPass {
           for (const id of n.leafIds) {
             const row = rowOf(id);
             if (!row) continue;
-            values.push(row[agg.field]);
-            if (agg.weightField) weights.push(row[agg.weightField]);
+            values.push(readField(row, agg.field));
+            if (agg.weightField) weights.push(readField(row, agg.weightField));
           }
           for (const ch of n.children) collect(ch);
         };
@@ -288,8 +289,8 @@ export class GroupPass {
       for (const id of leafIds) {
         const row = rowOf(id);
         if (!row) continue;
-        values.push(row[agg.field]);
-        if (agg.weightField) weights.push(row[agg.weightField]);
+        values.push(readField(row, agg.field));
+        if (agg.weightField) weights.push(readField(row, agg.weightField));
       }
       const useWeights = agg.weightField != null || agg.aggFunc === 'weightedAverage';
       const result = useWeights ? fn(values, weights) : fn(values);

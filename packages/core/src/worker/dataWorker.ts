@@ -11,6 +11,7 @@ import { deserializeTsv, serializeRanges } from './passes/clipboardPass';
 import { RulesPass } from './passes/rulesPass';
 import { DataPipeline } from './pipeline';
 import { RenderPlane } from './renderPlane';
+import { readField } from './fieldRead';
 import type {
   DataWorkerPush,
   DataWorkerRequest,
@@ -256,7 +257,7 @@ self.addEventListener('message', (e: MessageEvent<DataWorkerRequest>) => {
               if (!entry || entry.kind !== 'leaf' || !field) return '';
               const row = pipeline.getRow(entry.id);
               if (!row) return '';
-              const v = row[field];
+              const v = readField(row, field);
               return v == null ? '' : String(v);
             },
           };
