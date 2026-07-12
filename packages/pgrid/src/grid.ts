@@ -341,9 +341,9 @@ export class PspGrid {
         if (off && c === 0) {
           const meta = mat.rowMeta(r);
           if (!meta) return undefined;
-          // Leaves sit on the injected index level: label them by identity.
-          const text = meta.kind === 'group' ? groupLabel(meta) : meta.path[meta.level - 1] ?? meta.id;
-          return { text, styleClass: '', flash: 0 };
+          // Only group values render here (ag-grid semantics); leaf rows sit
+          // on the injected index level and leave the group column blank.
+          return { text: meta.kind === 'group' ? groupLabel(meta) : '', styleClass: '', flash: 0 };
         }
         return mat.cell(r, c - off);
       },
