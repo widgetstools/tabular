@@ -1,36 +1,68 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import type { Tabular } from '@tabular/core';
 import { TabularGrid } from '@tabular/react';
-import { makeBonds, type Bond } from '../data';
+import { makeBonds } from '../data';
 import { bondColumns } from '../columns';
+import { FI_COLUMNS, FI_GET_ROW_ID } from '../stomp/fiColumns';
+import type { FiPosition } from '../stomp/fiPositionsSource';
+import { useFiFeed, useFiUpdates } from '../stomp/sharedFeed';
+import { FeedBadge } from '../stomp/FeedBadge';
 
+/**
+ * STOMP-fed when the view server is up (live FI positions incl. nested
+ * dot-path columns); falls back to the original synthetic bonds offline.
+ */
 export function BasicPage() {
-  const rowData = useMemo(() => makeBonds(500), []);
-  const columnDefs = useMemo(() => bondColumns(), []);
+  const { rows, status } = useFiFeed();
+  const apiRef = useRef<Tabular<FiPosition> | null>(null);
+  const fallbackRows = useMemo(() => makeBonds(500), []);
+  const fallbackCols = useMemo(() => bondColumns(), []);
   const [counts, setCounts] = useState({ total: 0, displayed: 0 });
+  const live = status === 'ready' && rows;
+
+  useFiUpdates((batch) => apiRef.current?.applyTransactionAsync({ update: batch }), !!live);
 
   return (
     <main className="page">
       <div className="page-head">
         <h2>Basic grid</h2>
         <p>
-          500 bonds rendered on canvas — no DOM per row. CUSIP is pinned left; numeric columns are
-          right-aligned tabular monospace. Click a header to sort (asc → desc → none), shift-click
-          for multi-sort, and drag a header edge to resize.
+          Canvas rendering — no DOM per row. Live FI positions from the STOMP feed (nested{' '}
+          <code>rating.*</code> / <code>issuer.*</code> columns read via dot-paths); click a header
+          to sort (asc → desc → none), shift-click for multi-sort, drag a header edge to resize.
         </p>
       </div>
       <div className="grid-wrap">
-        <TabularGrid<Bond>
-          columnDefs={columnDefs}
-          rowData={rowData}
-          getRowId={(p) => p.data.id}
-          rowSelection="single"
-          density="compact"
-          onReady={(api) =>
-            api.on('modelUpdated', (e) =>
-              setCounts({ total: e.rowCount, displayed: e.displayedRowCount }),
-            )
-          }
-        />
+        {live ? (
+          <TabularGrid<FiPosition>
+            key="stomp"
+            columnDefs={FI_COLUMNS}
+            rowData={rows}
+            getRowId={FI_GET_ROW_ID}
+            rowSelection="single"
+            density="compact"
+            onReady={(api) => {
+              apiRef.current = api;
+              api.on('modelUpdated', (e) =>
+                setCounts({ total: e.rowCount, displayed: e.displayedRowCount }),
+              );
+            }}
+          />
+        ) : (
+          <TabularGrid
+            key="synthetic"
+            columnDefs={fallbackCols}
+            rowData={fallbackRows}
+            getRowId={(p) => (p.data as { id: string }).id}
+            rowSelection="single"
+            density="compact"
+            onReady={(api) =>
+              api.on('modelUpdated', (e) =>
+                setCounts({ total: e.rowCount, displayed: e.displayedRowCount }),
+              )
+            }
+          />
+        )}
       </div>
       <div className="status">
         <span>
@@ -39,6 +71,7 @@ export function BasicPage() {
         <span>
           Displayed <b>{counts.displayed.toLocaleString()}</b>
         </span>
+        <FeedBadge status={status} />
       </div>
     </main>
   );
