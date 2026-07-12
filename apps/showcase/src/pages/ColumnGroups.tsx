@@ -2,8 +2,55 @@ import { useMemo, useRef, useState } from 'react';
 import { TabularGrid } from '@tabular/react';
 import type { AnyColDef, Tabular } from '@tabular/core';
 import { makeBonds, type Bond } from '../data';
+import { FI_ID, FI_DESC, FI_NESTED, FI_MEASURES, FI_GET_ROW_ID } from '../stomp/fiColumns';
+import type { FiPosition } from '../stomp/fiPositionsSource';
+import { useFiFeed, useFiUpdates } from '../stomp/sharedFeed';
+import { FeedBadge } from '../stomp/FeedBadge';
+
+/** FI columns organized into labeled groups: Identity, Ratings (nested), Risk (nested), Measures. */
+const liveColumnDefs: AnyColDef<FiPosition>[] = [
+  FI_ID,
+  {
+    groupId: 'identity',
+    headerName: 'Identity',
+    children: FI_DESC,
+  },
+  {
+    groupId: 'ratings',
+    headerName: 'Ratings',
+    children: [
+      FI_NESTED.find((c) => c.field === 'rating.composite')!,
+      FI_NESTED.find((c) => c.field === 'rating.moody')!,
+      FI_NESTED.find((c) => c.field === 'issuer.name')!,
+      FI_NESTED.find((c) => c.field === 'issuer.sector')!,
+    ],
+  },
+  {
+    groupId: 'risk',
+    headerName: 'Risk',
+    children: [
+      FI_NESTED.find((c) => c.field === 'riskMetrics.var95')!,
+      FI_NESTED.find((c) => c.field === 'analytics.keyRateDuration.10Y')!,
+      FI_MEASURES.find((c) => c.field === 'dv01')!,
+      FI_MEASURES.find((c) => c.field === 'spread')!,
+    ],
+  },
+  {
+    groupId: 'measures',
+    headerName: 'Measures',
+    children: FI_MEASURES.filter((c) => c.field !== 'dv01' && c.field !== 'spread'),
+  },
+];
 
 export function ColumnGroupsPage() {
+  const { rows, status } = useFiFeed();
+  const live = status === 'ready' && rows;
+  const liveApiRef = useRef<Tabular<FiPosition> | null>(null);
+  const [liveGroupState, setLiveGroupState] = useState('');
+  useFiUpdates(
+    (batch) => liveApiRef.current?.applyTransactionAsync({ update: batch }),
+    !!live,
+  );
   const rowData = useMemo(() => makeBonds(400), []);
   const columnDefs = useMemo<AnyColDef<Bond>[]>(
     () => [
@@ -64,77 +111,120 @@ export function ColumnGroupsPage() {
   );
   const [groupState, setGroupState] = useState('');
   const apiRef = useRef<Tabular<Bond> | null>(null);
+  /** Demo group id: 'market' has columnGroupShow children on the synthetic grid; 'risk' mirrors it live. */
+  const demoGroupId = live ? 'risk' : 'market';
 
   return (
     <main className="page">
       <div className="page-head">
         <h2>Column groups</h2>
         <p>
-          Nested <code>ColGroupDef</code> headers with multi-row canvas painting. Click a group label
-          (▸/▾) to expand or collapse. <code>columnGroupShow</code> drives per-column visibility:
-          in <b>Market</b>, Levels + DV01 show <i>when expanded</i>, Px&nbsp;(net) shows{' '}
-          <i>when collapsed</i>, Notional is <i>always visible</i>. Also right-click headers for the
-          column context menu.
+          {live ? (
+            <>
+              Live FI columns organized into labeled groups — <b>Identity</b>, <b>Ratings</b>{' '}
+              (nested <code>rating.*</code> / <code>issuer.*</code>), <b>Risk</b> (nested{' '}
+              <code>riskMetrics.*</code> / <code>analytics.*</code>), and <b>Measures</b>.
+            </>
+          ) : (
+            <>
+              Nested <code>ColGroupDef</code> headers with multi-row canvas painting.{' '}
+              <code>columnGroupShow</code> drives per-column visibility: in <b>Market</b>, Levels +
+              DV01 show <i>when expanded</i>, Px&nbsp;(net) shows <i>when collapsed</i>, Notional is{' '}
+              <i>always visible</i>.
+            </>
+          )}{' '}
+          Click a group label (▸/▾) to expand or collapse. Also right-click headers for the column
+          context menu.
         </p>
       </div>
       <div className="controls">
-        <button onClick={() => apiRef.current?.setColumnGroupOpened('market', true)}>
-          Open Market (API)
-        </button>
-        <button onClick={() => apiRef.current?.setColumnGroupOpened('market', false)}>
-          Close Market (API)
+        <button
+          onClick={() =>
+            (live ? liveApiRef.current : apiRef.current)?.setColumnGroupOpened(demoGroupId, true)
+          }
+        >
+          Open {live ? 'Risk' : 'Market'} (API)
         </button>
         <button
           onClick={() =>
-            apiRef.current?.setColumnGroupState(
-              apiRef.current.getColumnGroupState().map((s) => ({ ...s, open: false })),
-            )
+            (live ? liveApiRef.current : apiRef.current)?.setColumnGroupOpened(demoGroupId, false)
           }
+        >
+          Close {live ? 'Risk' : 'Market'} (API)
+        </button>
+        <button
+          onClick={() => {
+            const api = live ? liveApiRef.current : apiRef.current;
+            api?.setColumnGroupState(api.getColumnGroupState().map((s) => ({ ...s, open: false })));
+          }}
         >
           Close all (API)
         </button>
         <button
-          onClick={() =>
-            apiRef.current?.setColumnGroupState(
-              apiRef.current.getColumnGroupState().map((s) => ({ ...s, open: true })),
-            )
-          }
+          onClick={() => {
+            const api = live ? liveApiRef.current : apiRef.current;
+            api?.setColumnGroupState(api.getColumnGroupState().map((s) => ({ ...s, open: true })));
+          }}
         >
           Open all (API)
         </button>
       </div>
       <div className="grid-wrap">
-        <TabularGrid<Bond>
-          columnDefs={columnDefs}
-          rowData={rowData}
-          getRowId={(p) => p.data.id}
-          density="compact"
-          onReady={(api) => {
-            apiRef.current = api;
-            api.on('columnGroupOpened', () => {
+        {live ? (
+          <TabularGrid<FiPosition>
+            key="stomp"
+            columnDefs={liveColumnDefs}
+            rowData={rows}
+            getRowId={FI_GET_ROW_ID}
+            density="compact"
+            onReady={(api) => {
+              liveApiRef.current = api;
+              const sync = () =>
+                setLiveGroupState(
+                  api
+                    .getColumnGroupState()
+                    .map((s) => `${s.groupId}:${s.open ? 'open' : 'closed'}`)
+                    .join(' · '),
+                );
+              api.on('columnGroupOpened', sync);
+              sync();
+            }}
+          />
+        ) : (
+          <TabularGrid<Bond>
+            key="synthetic"
+            columnDefs={columnDefs}
+            rowData={rowData}
+            getRowId={(p) => p.data.id}
+            density="compact"
+            onReady={(api) => {
+              apiRef.current = api;
+              api.on('columnGroupOpened', () => {
+                setGroupState(
+                  api
+                    .getColumnGroupState()
+                    .map((s) => `${s.groupId}:${s.open ? 'open' : 'closed'}`)
+                    .join(' · '),
+                );
+              });
               setGroupState(
                 api
                   .getColumnGroupState()
                   .map((s) => `${s.groupId}:${s.open ? 'open' : 'closed'}`)
                   .join(' · '),
               );
-            });
-            setGroupState(
-              api
-                .getColumnGroupState()
-                .map((s) => `${s.groupId}:${s.open ? 'open' : 'closed'}`)
-                .join(' · '),
-            );
-          }}
-        />
+            }}
+          />
+        )}
       </div>
-      {groupState ? (
-        <div className="status">
+      <div className="status">
+        {(live ? liveGroupState : groupState) ? (
           <span>
-            Group state <b>{groupState}</b>
+            Group state <b>{live ? liveGroupState : groupState}</b>
           </span>
-        </div>
-      ) : null}
+        ) : null}
+        <FeedBadge status={status} />
+      </div>
     </main>
   );
 }
