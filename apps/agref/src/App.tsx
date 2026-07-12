@@ -20,6 +20,7 @@ import { MiscPage } from './pages/Misc';
 import { PivotPage } from './pages/Pivot';
 import { PivotSidebarPage } from './pages/PivotSidebar';
 import { StatusOverlaysPage } from './pages/StatusOverlays';
+import { PerspectiveSsrmPage } from './pages/PerspectiveSsrm';
 
 const PAGES = [
   { id: 'basic', label: 'Basic grid', component: BasicPage },
@@ -43,6 +44,7 @@ const PAGES = [
   { id: 'range', label: 'Range selection', component: RangeSelectionPage },
   { id: 'tree', label: 'Tree data', component: TreeDataPage },
   { id: 'status', label: 'Status bar & overlays', component: StatusOverlaysPage },
+  { id: 'psp-ssrm', label: 'Perspective SSRM (FinOS)', component: PerspectiveSsrmPage },
 ] as const;
 
 export function App() {
