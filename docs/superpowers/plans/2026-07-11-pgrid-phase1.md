@@ -22,6 +22,7 @@ Each task below is sized for one working session. Session protocol:
 | Date | Task | Result | Notes / deviations |
 |---|---|---|---|
 | _(append rows here)_ | | | |
+| 2026-07-12 | Task 2 | ✅ `pgrid-window-math OK`, `tsc -p packages/pgrid` + full `npm run typecheck` green, commit `6afb126` | No deviations — test and math implemented exactly as planned; test passed on first run after implementation. One unstated detail made explicit: the plan leaves the `overscan` default unspecified, so a single `DEFAULT_OVERSCAN = 4` is shared by `computeViewport`, `poolSize`, and `visibleCols` — viewport and pool sizing must agree on overscan or `poolSlot` collides when callers omit it. |
 | 2026-07-11 | Task 1 | ✅ `pgrid-engine OK`, typecheck green, commit `06e0e70` | Two deviations. (1) The `node` entry of `@finos/perspective@3.8.0` has **no `worker()` factory** — it boots the engine in-process via top-level await at import and default-exports a module-level client facade (`{table, websocket, system_info, ...}`); `ensureEngine`'s node branch returns that default cast as `Client` (structurally sufficient — we only call `.table`). Browser branch unchanged (tsc under `moduleResolution: bundler` resolves browser types, so `worker`/`init_client`/`init_server` typecheck natively; no `vite-env.d.ts` needed — `as string` on the `?url` specifiers suffices). (2) Test script: `scripts/` is CJS-scoped (root package.json lacks `"type": "module"`) and perspective's ESM node entry can't be CJS-transformed (top-level await), so the plan's top-level-await test body is wrapped in `main()` and the engine module loaded via native dynamic `import()`. Same file name, same run command, same assertions. |
 
 ## Global Constraints
@@ -186,7 +187,7 @@ export function poolSlot(rowIndex: number, size: number): number;
 export function visibleCols(scrollLeft: number, clipW: number, widths: number[], overscan?: number): { firstCol: number; lastCol: number; leftPx: number };
 ```
 
-- [ ] **Step 1: Write the failing test** — `scripts/pgrid-window-math.ts`:
+- [x] **Step 1: Write the failing test** — `scripts/pgrid-window-math.ts`:
 
 ```ts
 import assert from 'node:assert/strict';
@@ -234,10 +235,10 @@ import { computeViewport, panelHeight, poolSize, poolSlot, visibleCols, MAX_PANE
 console.log('pgrid-window-math OK');
 ```
 
-- [ ] **Step 2: Run — expect FAIL.**
-- [ ] **Step 3: Implement.** Percent-scroll model (spec §6): when `rowCount*rowHeight+headerPx <= MAX_PANEL_PX` the mapping is exact (`anchor = scrollTop / rowHeight`); when clamped, `percent = scrollTop / (panelH - clipH)`, `anchorFloat = percent * (rowCount - clipH/rowHeight)`; `firstRow = floor(anchorFloat) - overscan` (clamped ≥0), `lastRow = firstRow + ceil(clipH/rowHeight) + 2*overscan` (clamped ≤ rowCount-1), `subCellPx = (anchorFloat % 1) * rowHeight`. `poolSize` = `min(rowCount, ceil(clipH/rowHeight) + 1 + 2*overscan)`, floor 1. `poolSlot` = `rowIndex % size`. `visibleCols` walks accumulated widths (no measurement — widths are authoritative from ColDefs).
-- [ ] **Step 4: Run — expect `pgrid-window-math OK`;** `npx tsc -p packages/pgrid` exit 0.
-- [ ] **Step 5: Commit** — `git commit -m "feat(pgrid): percent-scroll window math with 10M-px clamp"` (add both files).
+- [x] **Step 2: Run — expect FAIL.**
+- [x] **Step 3: Implement.** Percent-scroll model (spec §6): when `rowCount*rowHeight+headerPx <= MAX_PANEL_PX` the mapping is exact (`anchor = scrollTop / rowHeight`); when clamped, `percent = scrollTop / (panelH - clipH)`, `anchorFloat = percent * (rowCount - clipH/rowHeight)`; `firstRow = floor(anchorFloat) - overscan` (clamped ≥0), `lastRow = firstRow + ceil(clipH/rowHeight) + 2*overscan` (clamped ≤ rowCount-1), `subCellPx = (anchorFloat % 1) * rowHeight`. `poolSize` = `min(rowCount, ceil(clipH/rowHeight) + 1 + 2*overscan)`, floor 1. `poolSlot` = `rowIndex % size`. `visibleCols` walks accumulated widths (no measurement — widths are authoritative from ColDefs).
+- [x] **Step 4: Run — expect `pgrid-window-math OK`;** `npx tsc -p packages/pgrid` exit 0.
+- [x] **Step 5: Commit** — `git commit -m "feat(pgrid): percent-scroll window math with 10M-px clamp"` (add both files).
 
 ---
 
