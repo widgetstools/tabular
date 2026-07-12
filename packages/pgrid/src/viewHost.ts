@@ -109,8 +109,15 @@ export class ViewHost {
     ) as Record<string, unknown[]>;
     const rowPaths = (parsed['__ROW_PATH__'] as unknown[][] | undefined) ?? null;
     const ids = (parsed['__ID__'] as unknown[][] | undefined) ?? null;
-    const cols = Object.keys(parsed).filter((k) => !META_COLUMN_RE.test(k));
-    const returned = rowPaths?.length ?? ids?.length ?? (cols[0] ? parsed[cols[0]].length : 0);
+    // Columns come from the cached path list, NOT the response keys: with
+    // split_by, an update can add pivot columns to the engine before the
+    // grid's header/geometry rebuild sees them (the FinOS datagrid guards the
+    // same seam) — keying by cache keeps data and headers consistent, and the
+    // new column set lands atomically on the next update flush.
+    const cols = this.colPaths.slice(firstCol, lastCol + 1);
+    const firstKey = Object.keys(parsed).find((k) => !META_COLUMN_RE.test(k));
+    const returned =
+      rowPaths?.length ?? ids?.length ?? (firstKey ? parsed[firstKey].length : 0);
     const rowCount = Math.min(returned, lastRow - firstRow + 1);
     const metas: RowMeta[] = [];
     for (let i = 0; i < rowCount; i++) {
@@ -128,7 +135,9 @@ export class ViewHost {
       });
     }
     const values = cols.map((c) => {
-      const arr = parsed[c].slice(0, rowCount);
+      const arr: unknown[] =
+        (parsed[c] as unknown[] | undefined)?.slice(0, rowCount) ??
+        new Array<unknown>(rowCount).fill(null);
       if (grouped && this.aggDepth > 0) {
         for (let i = 0; i < rowCount; i++) {
           if (metas[i].path.length < this.aggDepth) arr[i] = null;
@@ -206,6 +215,13 @@ export class ViewHost {
     if (this.disposed || !this.view) return;
     const prev = this.numRows;
     await this.refreshRowCount();
+    if (this.userCfg && this.userCfg.split_by.length > 0) {
+      // Updates can add/remove pivot columns (a new split value arrived);
+      // refresh the cache so window reads and the grid's rebuild see them.
+      const paths = (await this.view.column_paths()) as string[];
+      this.colPaths = paths.filter((p) => !META_COLUMN_RE.test(p));
+    }
+    if (this.disposed) return;
     this.events.onModelUpdated(this.numRows !== prev);
     if (this.trailingUpdate) {
       this.trailingUpdate = false;

@@ -69,6 +69,8 @@ export class PspGrid {
   /** 1 when the auto group column is present, 0 otherwise. */
   private groupOffset = 0;
   private groupColW = GROUP_COL_W;
+  /** Column-path fingerprint of the last rebuild — updates can grow the pivot column set. */
+  private pathsKey = '';
 
   private lastV: Viewport | null = null;
   private lastC: ColRange | null = null;
@@ -326,6 +328,7 @@ export class PspGrid {
       x += c.width;
     }
     this.totalWidth = x;
+    this.pathsKey = host.columnPaths().join(' ');
   }
 
   /** RenderView over the materializer that prepends the display-only group column. */
@@ -448,6 +451,14 @@ export class PspGrid {
 
   private onModelUpdated(rowCountChanged: boolean): void {
     if (this.destroyed) return;
+    // An update can add pivot columns (new split value in the data): rebuild
+    // the display columns and header before repainting so data stays under
+    // the right headers.
+    if (this.host && this.host.columnPaths().join(' ') !== this.pathsKey) {
+      this.rebuildColumns();
+      this.header.render(this.state, this.displayCols, this.cfg);
+      this.scheduleSync(true);
+    }
     this.mat?.invalidate();
     if (rowCountChanged) this.scheduleSync(true);
     this.emit('model-updated');

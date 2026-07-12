@@ -45,6 +45,34 @@ async function main(): Promise<void> {
   await host.setConfig(compileView(state), 0);
   assert.equal(host.rowCount(), 4);                   // still expanded
   await host.dispose();
+
+  // split_by: window values key off the cached column paths (null-filled when
+  // absent), and an update that introduces a new split value grows the column
+  // set by the next flush (FinOS datagrid parity — see 2026-07-12 fix row).
+  const t2 = await createIndexedTable({ id: 'string', ccy: 'string', mv: 'float' }, 'id');
+  t2.update([{ id: 'a', ccy: 'USD', mv: 1 }, { id: 'b', ccy: 'EUR', mv: 2 }]);
+  let updates2 = 0;
+  const host2 = new ViewHost(t2, { onModelUpdated: () => { updates2++; } });
+  const state2: GridState = {
+    columnDefs: [{ field: 'id' }, { field: 'ccy' }, { field: 'mv', type: 'float', aggFunc: 'sum' }],
+    rowGroupCols: ['id'], pivotCols: ['ccy'], valueCols: [{ field: 'mv', aggFunc: 'sum' }],
+    sortModel: [], filterModel: {}, pivotMode: true,
+  };
+  await host2.setConfig(compileView(state2), 0);
+  assert.deepEqual(host2.columnPaths(), ['EUR|mv', 'USD|mv']);
+  const wp = await host2.window(0, 2, 0, 1);
+  assert.deepEqual(wp.cols, ['EUR|mv', 'USD|mv']);       // cache order, not response-key order
+  assert.equal(wp.values[1][0], 1);                      // TOTAL row, USD sum
+  t2.update([{ id: 'c', ccy: 'CHF', mv: 3 }]);           // new split value → new column
+  await new Promise((r) => setTimeout(r, 300));
+  assert.ok(updates2 > 0, 'split on_update fired');
+  assert.deepEqual(host2.columnPaths(), ['CHF|mv', 'EUR|mv', 'USD|mv']);
+  const wp2 = await host2.window(0, 3, 0, 2);
+  assert.deepEqual(wp2.cols, ['CHF|mv', 'EUR|mv', 'USD|mv']);
+  assert.equal(wp2.values[0][0], 3);                     // TOTAL row, CHF sum
+  await host2.dispose();
+  await t2.delete();
+
   console.log('pgrid-view-host OK');
   process.exit(0);
 }
