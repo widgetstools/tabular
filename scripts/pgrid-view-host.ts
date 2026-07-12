@@ -63,6 +63,10 @@ async function main(): Promise<void> {
   const wp = await host2.window(0, 2, 0, 1);
   assert.deepEqual(wp.cols, ['EUR|mv', 'USD|mv']);       // cache order, not response-key order
   assert.equal(wp.values[1][0], 1);                      // TOTAL row, USD sum
+  // Pivot mode: no injected leaf level — deepest groups are the tree floor.
+  assert.equal(wp.metas[0].expandable, true);            // TOTAL can expand to id groups
+  assert.equal(wp.metas[1].kind, 'group');
+  assert.equal(wp.metas[1].expandable, false);           // deepest level: no leaf drill-down
   t2.update([{ id: 'c', ccy: 'CHF', mv: 3 }]);           // new split value → new column
   await new Promise((r) => setTimeout(r, 300));
   assert.ok(updates2 > 0, 'split on_update fired');

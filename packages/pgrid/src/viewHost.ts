@@ -26,6 +26,8 @@ export class ViewHost {
   private throttleTimer: ReturnType<typeof setTimeout> | null = null;
   private trailingUpdate = false;
   private disposed = false;
+  /** Engine group levels (user levels + injected leaf level when present). */
+  private engineDepth = 0;
   /**
    * Blank aggregate cells on group rows shallower than this (spec §5.3). The
    * FinOS datagrid exposes it per column as `aggregate_depth`, default 0 —
@@ -43,14 +45,17 @@ export class ViewHost {
     if (this.view && this.userCfg && isEquivalent(this.userCfg, cfg)) return;
     const raw = this.table.raw();
     const engineCfg: PspViewConfig = { ...cfg, group_by: [...cfg.group_by] };
-    if (cfg.group_by.length > 0) {
+    if (cfg.group_by.length > 0 && cfg.split_by.length === 0) {
       // Perspective's grouped tree is exactly group_by.length levels deep —
       // there is no leaf level below the deepest group. Append the table's
       // index column as an extra grouping level so groups expand to the
-      // underlying rows (ag-grid semantics).
+      // underlying rows (ag-grid semantics). NOT in pivot mode: there the
+      // tree bottoms out at the deepest group (leaf drill-down of pivoted
+      // aggregates is meaningless — ag-grid semantics again).
       const indexCol = await raw.get_index();
       if (indexCol && !engineCfg.group_by.includes(indexCol)) engineCfg.group_by.push(indexCol);
     }
+    this.engineDepth = engineCfg.group_by.length;
     // Build the new view before touching the old one — there is never a gap
     // with no live view (spec §5.5).
     const next = await raw.view(engineCfg as never);
@@ -132,6 +137,7 @@ export class ViewHost {
         level: path.length,
         path,
         expanded: isGroup && nextPath != null && nextPath.length > path.length,
+        expandable: isGroup && path.length < this.engineDepth,
       });
     }
     const values = cols.map((c) => {
@@ -214,15 +220,21 @@ export class ViewHost {
     this.throttleTimer = null;
     if (this.disposed || !this.view) return;
     const prev = this.numRows;
+    // Notify BEFORE the count refresh: the listener's window re-read then
+    // enters the engine queue alongside num_rows instead of a full queue-wait
+    // later — under a saturated engine (10k updates/s) serialized round-trips
+    // are the tick-cadence bottleneck, and the read is order-safe (the engine
+    // has already applied the update that fired on_update).
+    this.events.onModelUpdated(false);
     await this.refreshRowCount();
-    if (this.userCfg && this.userCfg.split_by.length > 0) {
+    if (this.userCfg && this.userCfg.split_by.length > 0 && this.view) {
       // Updates can add/remove pivot columns (a new split value arrived);
       // refresh the cache so window reads and the grid's rebuild see them.
       const paths = (await this.view.column_paths()) as string[];
       this.colPaths = paths.filter((p) => !META_COLUMN_RE.test(p));
     }
     if (this.disposed) return;
-    this.events.onModelUpdated(this.numRows !== prev);
+    if (this.numRows !== prev) this.events.onModelUpdated(true);
     if (this.trailingUpdate) {
       this.trailingUpdate = false;
       this.onEngineUpdate();

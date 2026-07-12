@@ -103,7 +103,10 @@ export class RowPool {
       slot.el.dataset.odd = r % 2 === 1 ? '1' : '0';
       const isGroup = meta.kind === 'group';
       slot.el.classList.toggle(CLS.group, isGroup);
-      if (isGroup) {
+      // Non-expandable groups (tree floor, e.g. deepest pivot level) hide the
+      // chevron — inline 'none' beats the .pg-group CSS display rule.
+      slot.chevron.style.display = isGroup && !meta.expandable ? 'none' : '';
+      if (isGroup && meta.expandable) {
         slot.chevron.style.left = `${meta.level * geo.groupIndent}px`;
         slot.chevron.dataset.expanded = meta.expanded ? '1' : '0';
       }
@@ -144,10 +147,10 @@ export class RowPool {
     cell.style.left = `${geo.colLefts[absCol]}px`;
     cell.style.width = `${geo.colWidths[absCol]}px`;
     const meta = view.rowMeta(r);
-    // First visible cell indents by tree depth; group rows also clear the chevron.
+    // First visible cell indents by tree depth; expandable groups also clear the chevron.
     cell.style.paddingLeft =
       absCol === geo.firstCol && meta && (meta.kind === 'group' || meta.level > 0)
-        ? `${meta.level * geo.groupIndent + (meta.kind === 'group' ? CHEVRON_W : 0)}px`
+        ? `${meta.level * geo.groupIndent + (meta.kind === 'group' && meta.expandable ? CHEVRON_W : 0)}px`
         : '';
     const cr = view.cell(r, absCol);
     const text = cr?.text ?? '';

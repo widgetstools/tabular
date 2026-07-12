@@ -328,7 +328,7 @@ export class PspGrid {
       x += c.width;
     }
     this.totalWidth = x;
-    this.pathsKey = host.columnPaths().join(' ');
+    this.pathsKey = host.columnPaths().join('\u0000');
   }
 
   /** RenderView over the materializer that prepends the display-only group column. */
@@ -454,7 +454,7 @@ export class PspGrid {
     // An update can add pivot columns (new split value in the data): rebuild
     // the display columns and header before repainting so data stays under
     // the right headers.
-    if (this.host && this.host.columnPaths().join(' ') !== this.pathsKey) {
+    if (this.host && this.host.columnPaths().join('\u0000') !== this.pathsKey) {
       this.rebuildColumns();
       this.header.render(this.state, this.displayCols, this.cfg);
       this.scheduleSync(true);
@@ -490,9 +490,11 @@ export class PspGrid {
   }
 
   /**
-   * Expand/collapse by view row index, identity-checked against the current
-   * frame's meta (spec §10) and awaited through the next repaint (Global
-   * Constraints).
+   * Expand/collapse by view row index, identity-checked against a FRESH
+   * engine read (spec §10): under ticking updates the stamped index and
+   * expanded flag can be a frame stale — the fresh read serializes behind
+   * pending engine updates, and on identity mismatch the row is re-resolved
+   * by path. Awaited through the next repaint (Global Constraints).
    */
   private async toggleExpand(r: number): Promise<void> {
     const host = this.host;
@@ -500,9 +502,20 @@ export class PspGrid {
     const mat = this.mat;
     if (!host || !rv || !mat) return;
     const meta = rv.rowMeta(r);
-    if (!meta || meta.kind !== 'group') return;
-    if (meta.expanded) await host.collapse(r);
-    else await host.expand(r);
+    if (!meta || meta.kind !== 'group' || !meta.expandable) return;
+    const key = meta.path.join('\u0000');
+    let target = r;
+    let fresh = (await host.window(r, r, 0, 0)).metas[0];
+    if (!fresh || fresh.path.join('\u0000') !== key) {
+      const around = await host.window(Math.max(0, r - 50), r + 50, 0, 0);
+      const idx = around.metas.findIndex((m) => m.path.join('\u0000') === key);
+      if (idx === -1) return;
+      target = around.firstRow + idx;
+      fresh = around.metas[idx];
+    }
+    if (this.destroyed || fresh.kind !== 'group' || !fresh.expandable) return;
+    if (fresh.expanded) await host.collapse(target);
+    else await host.expand(target);
     if (this.destroyed) return;
     const painted = this.nextFrame();
     mat.invalidate();

@@ -58,6 +58,8 @@ export interface RowMeta {
   level: number;
   path: string[];
   expanded: boolean;
+  /** False for groups at the tree floor (e.g. deepest level in pivot mode — no leaf drill-down). */
+  expandable: boolean;
 }
 
 /** One cell ready to stamp: text + class + one-frame flash direction. */
