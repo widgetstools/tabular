@@ -1,6 +1,10 @@
-import { useMemo, useState } from 'react';
-import type { ColDef, GridOptions } from '@tabular/core';
+import { useMemo, useRef, useState } from 'react';
+import type { ColDef, GridOptions, Tabular } from '@tabular/core';
 import { TabularGrid } from '@tabular/react';
+import { FI_ID, FI_GET_ROW_ID } from '../stomp/fiColumns';
+import type { FiPosition } from '../stomp/fiPositionsSource';
+import { useFiFeed, useFiUpdates } from '../stomp/sharedFeed';
+import { FeedBadge } from '../stomp/FeedBadge';
 
 type Mode = 'getRowHeight' | 'autoHeight' | 'fullWidth' | 'headers';
 
@@ -38,7 +42,49 @@ export function makePeople(n: number): PersonRow[] {
   return rows;
 }
 
+/** Deterministic string hash — used on the live path to derive a per-row
+ * pixel height / full-width flag from `cusip` (no synthetic `size`/
+ * `fullWidth` fields exist on FI positions). */
+function fiHash(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+/** Live column sets: same four demos, over FI fields — `instrumentName`
+ * stands in for the long-text `notes` column (wrapText/autoHeight target). */
+const liveBaseCols: ColDef<FiPosition>[] = [
+  { field: 'ticker', headerName: 'Ticker', width: 90 },
+  { field: 'region', headerName: 'Region', width: 130 },
+  { field: 'currency', headerName: 'Ccy', width: 90 },
+  { field: 'instrumentName', headerName: 'Instrument', flex: 1, minWidth: 200 },
+];
+
+const liveAutoHeightCols: ColDef<FiPosition>[] = [
+  { field: 'instrumentName', headerName: 'Auto height (wrapText + autoHeight)', wrapText: true, autoHeight: true, width: 320 },
+  { field: 'instrumentName', colId: 'notesClipped', headerName: 'Wrap only (clipped)', wrapText: true, width: 260 },
+  { field: 'ticker', headerName: 'Ticker', width: 90 },
+  { field: 'region', headerName: 'Region', width: 130 },
+  { field: 'currency', headerName: 'Ccy', width: 90 },
+];
+
+const liveHeaderCols: ColDef<FiPosition>[] = [
+  { field: 'ticker', headerName: 'Ticker symbol (as registered with the exchange)', width: 150 },
+  { field: 'region', headerName: 'Region of booking desk', width: 130 },
+  { field: 'currency', headerName: 'Settlement currency', width: 120 },
+  { ...FI_ID, headerName: 'Wrap only — no autoHeaderHeight', autoHeaderHeight: false, width: 110 },
+  { field: 'instrumentName', headerName: 'Instrument', flex: 1, minWidth: 160 },
+];
+
 export function RowHeightPage() {
+  const { rows, status } = useFiFeed();
+  const live = status === 'ready' && rows;
+  const liveApiRef = useRef<Tabular<FiPosition> | null>(null);
+  useFiUpdates(
+    (batch) => liveApiRef.current?.applyTransactionAsync({ update: batch }),
+    !!live,
+  );
+
   const [mode, setMode] = useState<Mode>('getRowHeight');
   const rowData = useMemo(() => makePeople(60), []);
 
@@ -107,6 +153,43 @@ export function RowHeightPage() {
     return {};
   }, [mode]);
 
+  const liveModeOptions = useMemo<Partial<GridOptions<FiPosition>>>(() => {
+    if (mode === 'headers') {
+      return {
+        defaultColDef: { wrapHeaderText: true, autoHeaderHeight: true, resizable: true },
+      };
+    }
+    if (mode === 'getRowHeight') {
+      return {
+        getRowHeight: (p) => {
+          const cusip = String(p.data?.cusip ?? '');
+          return 28 + (fiHash(cusip) % 5) * 14;
+        },
+      };
+    }
+    if (mode === 'fullWidth') {
+      return {
+        isFullWidthRow: (p) => fiHash(String(p.rowNode.data?.cusip ?? '')) % 7 === 5,
+        fullWidthCellRenderer: (ctx, p) => {
+          const t = p.theme;
+          ctx.fillStyle = 'rgba(43, 108, 176, 0.14)';
+          ctx.fillRect(p.x, p.y, p.width, p.height);
+          ctx.font = `600 ${t.fontSize}px ${t.fontSans}`;
+          ctx.fillStyle = t.textPrimary;
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          const d = p.data;
+          ctx.fillText(`★ ${d?.ticker} — ${d?.region} (${d?.currency})`, p.x + 12, p.y + 18);
+          ctx.font = `400 ${t.fontSize - 1}px ${t.fontSans}`;
+          ctx.fillStyle = t.textSecondary;
+          ctx.fillText(String(d?.instrumentName ?? ''), p.x + 12, p.y + 40, p.width - 24);
+        },
+        getRowHeight: (p) => (fiHash(String(p.data?.cusip ?? '')) % 7 === 5 ? 56 : undefined),
+      };
+    }
+    return {};
+  }, [mode]);
+
   return (
     <main className="page">
       <div className="page-head">
@@ -118,6 +201,13 @@ export function RowHeightPage() {
           <code>fullWidthCellRenderer</code> paint one cell across the whole viewport.{' '}
           <b>Header sizing</b>: <code>wrapHeaderText</code> + <code>autoHeaderHeight</code> — drag a
           column edge and the header row re-measures.
+          {live ? (
+            <>
+              {' '}
+              Live FI positions — <code>instrumentName</code> stands in for the wrapped-text column;
+              per-row height/full-width flag derive from a hash of <code>cusip</code>.
+            </>
+          ) : null}
         </p>
       </div>
       <div className="controls">
@@ -134,12 +224,28 @@ export function RowHeightPage() {
         ))}
       </div>
       <div className="grid-wrap">
-        <TabularGrid<PersonRow>
-          key={mode}
-          {...modeOptions}
-          columnDefs={mode === 'autoHeight' ? autoHeightCols : mode === 'headers' ? headerCols : baseCols}
-          rowData={rowData}
-        />
+        {live ? (
+          <TabularGrid<FiPosition>
+            key={`stomp-${mode}`}
+            {...liveModeOptions}
+            columnDefs={mode === 'autoHeight' ? liveAutoHeightCols : mode === 'headers' ? liveHeaderCols : liveBaseCols}
+            rowData={rows}
+            getRowId={FI_GET_ROW_ID}
+            onReady={(api) => {
+              liveApiRef.current = api;
+            }}
+          />
+        ) : (
+          <TabularGrid<PersonRow>
+            key={`synthetic-${mode}`}
+            {...modeOptions}
+            columnDefs={mode === 'autoHeight' ? autoHeightCols : mode === 'headers' ? headerCols : baseCols}
+            rowData={rowData}
+          />
+        )}
+      </div>
+      <div className="status">
+        <FeedBadge status={status} />
       </div>
     </main>
   );

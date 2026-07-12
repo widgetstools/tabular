@@ -1,12 +1,23 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { Density, ThemeName } from '@tabular/core';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { Density, Tabular, ThemeName } from '@tabular/core';
 import { TabularGrid } from '@tabular/react';
 import { makeBonds, type Bond } from '../data';
 import { bondColumns } from '../columns';
+import { FI_COLUMNS, FI_GET_ROW_ID } from '../stomp/fiColumns';
+import type { FiPosition } from '../stomp/fiPositionsSource';
+import { useFiFeed, useFiUpdates } from '../stomp/sharedFeed';
+import { FeedBadge } from '../stomp/FeedBadge';
 
 const DENSITIES: Density[] = ['comfortable', 'compact', 'dense'];
 
 export function ThemingPage() {
+  const { rows, status } = useFiFeed();
+  const live = status === 'ready' && rows;
+  const liveApiRef = useRef<Tabular<FiPosition> | null>(null);
+  useFiUpdates(
+    (batch) => liveApiRef.current?.applyTransactionAsync({ update: batch }),
+    !!live,
+  );
   const rowData = useMemo(() => makeBonds(1000), []);
   const columnDefs = useMemo(() => bondColumns(), []);
   const [theme, setTheme] = useState<ThemeName>('dark');
@@ -46,19 +57,36 @@ export function ThemingPage() {
         ))}
       </div>
       <div className="grid-wrap">
-        <TabularGrid<Bond>
-          columnDefs={columnDefs}
-          rowData={rowData}
-          getRowId={(p) => p.data.id}
-          theme={theme}
-          density={density}
-          rowSelection="multiple"
-        />
+        {live ? (
+          <TabularGrid<FiPosition>
+            key="stomp"
+            columnDefs={FI_COLUMNS}
+            rowData={rows}
+            getRowId={FI_GET_ROW_ID}
+            theme={theme}
+            density={density}
+            rowSelection="multiple"
+            onReady={(api) => {
+              liveApiRef.current = api;
+            }}
+          />
+        ) : (
+          <TabularGrid<Bond>
+            key="synthetic"
+            columnDefs={columnDefs}
+            rowData={rowData}
+            getRowId={(p) => p.data.id}
+            theme={theme}
+            density={density}
+            rowSelection="multiple"
+          />
+        )}
       </div>
       <div className="status">
         <span>
           Gridlines: <b>both</b> (horizontal + vertical)
         </span>
+        <FeedBadge status={status} />
       </div>
     </main>
   );
