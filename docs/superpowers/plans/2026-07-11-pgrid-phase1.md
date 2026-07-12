@@ -22,6 +22,7 @@ Each task below is sized for one working session. Session protocol:
 | Date | Task | Result | Notes / deviations |
 |---|---|---|---|
 | _(append rows here)_ | | | |
+| 2026-07-11 | Task 1 | ✅ `pgrid-engine OK`, typecheck green, commit `06e0e70` | Two deviations. (1) The `node` entry of `@finos/perspective@3.8.0` has **no `worker()` factory** — it boots the engine in-process via top-level await at import and default-exports a module-level client facade (`{table, websocket, system_info, ...}`); `ensureEngine`'s node branch returns that default cast as `Client` (structurally sufficient — we only call `.table`). Browser branch unchanged (tsc under `moduleResolution: bundler` resolves browser types, so `worker`/`init_client`/`init_server` typecheck natively; no `vite-env.d.ts` needed — `as string` on the `?url` specifiers suffices). (2) Test script: `scripts/` is CJS-scoped (root package.json lacks `"type": "module"`) and perspective's ESM node entry can't be CJS-transformed (top-level await), so the plan's top-level-await test body is wrapped in `main()` and the engine module loaded via native dynamic `import()`. Same file name, same run command, same assertions. |
 
 ## Global Constraints
 
@@ -88,7 +89,7 @@ export interface WindowSlice {
 }
 ```
 
-- [ ] **Step 1: Scaffold.** `packages/pgrid/package.json`:
+- [x] **Step 1: Scaffold.** `packages/pgrid/package.json`:
 
 ```json
 {
@@ -108,7 +109,7 @@ export interface WindowSlice {
 
 `tsconfig.json`: copy `packages/renderers/tsconfig.json`, adjust include to `src`. Add `tsc -p packages/pgrid && ` to the root `typecheck` script (before `tsc -p apps/showcase`). `npm install`.
 
-- [ ] **Step 2: Write the failing test** — `scripts/pgrid-engine.ts`:
+- [x] **Step 2: Write the failing test** — `scripts/pgrid-engine.ts`:
 
 ```ts
 import assert from 'node:assert/strict';
@@ -129,8 +130,8 @@ console.log('pgrid-engine OK');
 process.exit(0);
 ```
 
-- [ ] **Step 3: Run — expect FAIL** (`npx tsx scripts/pgrid-engine.ts`; module doesn't exist).
-- [ ] **Step 4: Implement `engine.ts`.** Node/browser dual bootstrap: in node, `import perspective from '@finos/perspective'` works directly (its `node` export condition boots the engine without fetch). In the browser, init requires the wasm assets:
+- [x] **Step 3: Run — expect FAIL** (`npx tsx scripts/pgrid-engine.ts`; module doesn't exist).
+- [x] **Step 4: Implement `engine.ts`.** Node/browser dual bootstrap: in node, `import perspective from '@finos/perspective'` works directly (its `node` export condition boots the engine without fetch). In the browser, init requires the wasm assets:
 
 ```ts
 import perspective from '@finos/perspective';
@@ -161,8 +162,8 @@ export function ensureEngine(): Promise<Client> {
 
 Verify the node path actually works by reading `node_modules/@finos/perspective/dist/esm/perspective.node.js` exports — if node exposes a different factory than `worker()` (e.g. a default in-process client), adapt and note it in the Session Log. `createIndexedTable`: `client.table(schema as never, { index: indexField })`, wrap with a 2500-row chunking `update`, `delete()` forwarding. If the dynamic `?url` import trips tsc in node context, isolate it behind `/* @vite-ignore */` + a `declare module '*?url'` in `packages/pgrid/src/vite-env.d.ts`.
 
-- [ ] **Step 5: Run — expect `pgrid-engine OK`.** Then `npm run typecheck` — exit 0.
-- [ ] **Step 6: Commit** — `git add packages/pgrid scripts/pgrid-engine.ts package.json package-lock.json && git commit -m "feat(pgrid): scaffold + headless Perspective engine bootstrap"`
+- [x] **Step 5: Run — expect `pgrid-engine OK`.** Then `npm run typecheck` — exit 0.
+- [x] **Step 6: Commit** — `git add packages/pgrid scripts/pgrid-engine.ts package.json package-lock.json && git commit -m "feat(pgrid): scaffold + headless Perspective engine bootstrap"`
 
 ---
 
