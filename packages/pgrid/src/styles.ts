@@ -109,7 +109,11 @@ const BASE_CSS = `
 .${CLS.toggle}:disabled { opacity: 0.35; cursor: default; }
 .${CLS.scroller} { flex: 1; overflow: auto; position: relative; }
 .${CLS.spacer} { position: absolute; top: 0; left: 0; width: 1px; visibility: hidden; }
-.${CLS.layer} { position: absolute; top: 0; left: 0; }
+.${CLS.layer} { position: sticky; top: 0; left: 0; height: 0; overflow: visible;
+  z-index: 1; will-change: transform;
+  /* Sticky = compositor-pinned: async (wheel/momentum) scrolling cannot move
+     painted rows before the main-thread sync runs — the structural fix for
+     scroll flicker/blank; regular-table clip-pins its table the same way. */ }
 .${CLS.row} { position: absolute; left: 0; height: var(--pg-row-h);
   border-bottom: 1px solid var(--pg-gridline); will-change: transform; contain: strict; }
 .${CLS.row}[data-odd="1"] { background: var(--pg-raised); }

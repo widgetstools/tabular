@@ -28,6 +28,13 @@ import { ViewHost } from './viewHost';
 
 /** Must match the stylesheet's `--pg-row-h`. */
 const ROW_H = 26;
+/**
+ * Row overscan (columns keep windowMath's default 4). Vertical windows move
+ * every 26px vs ~120px for columns, so rows need a deeper buffer for the same
+ * feel: 12 rows ≈ 312px each side keeps the stale window covering the
+ * viewport far longer under engine lag (vertical parity with horizontal).
+ */
+const ROW_OVERSCAN = 12;
 /** Px per group nesting level (first visible cell indent + chevron offset). */
 const GROUP_INDENT = 12;
 /** Display-only column id for the auto group column — never reaches the engine. */
@@ -74,8 +81,10 @@ export class PspGrid {
 
   private lastV: Viewport | null = null;
   private lastC: ColRange | null = null;
-  /** Last written layer position + painted row count; anchors stale-pixel handling. */
-  private painted: { layerY: number; rows: number } | null = null;
+  /** Content-space top of the painted rows + their count; anchors stale-pixel handling. */
+  private painted: { contentTop: number; rows: number } | null = null;
+  /** Current sticky-layer y (viewport-relative). */
+  private layerY = 0;
   /** True while stale pixels are shown for an in-flight window read. */
   private glued = false;
   private poolAllocSize = -1;
@@ -125,7 +134,9 @@ export class PspGrid {
     this.spacer.className = CLS.spacer;
     this.layer = document.createElement('div');
     this.layer.className = CLS.layer;
-    this.scroller.append(this.spacer, this.layer);
+    // Layer first (in-flow, sticky at the scrollport origin), spacer second
+    // (absolute, provides the scroll range).
+    this.scroller.append(this.layer, this.spacer);
     // panels strip on top; below it the header+scroller column with the
     // columns sidebar to its right.
     const main = document.createElement('div');
@@ -385,9 +396,11 @@ export class PspGrid {
     const panelH = panelHeight(rowCount, ROW_H, 0);
     this.spacer.style.height = `${panelH}px`;
     this.spacer.style.width = `${this.totalWidth}px`;
-    const v = computeViewport(this.scroller.scrollTop, panelH, clipH, rowCount, ROW_H);
-    const c = visibleCols(this.scroller.scrollLeft, clipW, this.colWidths);
-    this.header.setScrollLeft(this.scroller.scrollLeft);
+    const scrollTop = this.scroller.scrollTop;
+    const scrollLeft = this.scroller.scrollLeft;
+    const v = computeViewport(scrollTop, panelH, clipH, rowCount, ROW_H, ROW_OVERSCAN);
+    const c = visibleCols(scrollLeft, clipW, this.colWidths);
+    this.header.setScrollLeft(scrollLeft);
     const lv = this.lastV;
     const lc = this.lastC;
     const sameWindow =
@@ -397,52 +410,49 @@ export class PspGrid {
       lv.lastRow === v.lastRow &&
       lc.firstCol === c.firstCol &&
       lc.lastCol === c.lastCol;
-    // Draw-skip fast path: logical window and sub-cell offset unchanged.
-    if (!force && sameWindow && lv.subCellPx === v.subCellPx) return;
+    // Fast path: logical window and sub-cell offset unchanged — the sticky
+    // layer still needs its horizontal offset refreshed.
+    if (!force && sameWindow && lv.subCellPx === v.subCellPx) {
+      this.placeLayer(this.layerY, scrollLeft);
+      return;
+    }
     this.lastV = v;
     this.lastC = c;
     // Only a changed window needs an engine read — sub-row scrolling within
     // the same window is pure geometry (regular-table's cheap-scroll path;
     // a redundant fetch would queue behind update batches and slow ticks).
     if (force || !sameWindow) rv.requestWindow(v, c);
-    const scrollTop = this.scroller.scrollTop;
     // Paints are ATOMIC (regular-table semantics): swap to the new window only
     // when data covers ALL of it — a partial overlap must not stamp half a
-    // viewport and leave the rest empty. Until then, glue the previously
-    // painted pixels to the viewport — they track the scroll 1:1, so fast
-    // scrolling shows a complete stale window instead of a blank or torn pane.
+    // viewport and leave the rest empty.
     const covered =
       rowCount > 0 &&
       !!rv.rowMeta(v.firstRow) &&
       !!rv.rowMeta(Math.min(v.lastRow, rowCount - 1));
     if (!covered && rowCount > 0 && this.painted) {
-      // Stale rows scroll natively at their true content coordinates (the
-      // eventual swap lands on identical coordinates — no jump). When the
-      // viewport reaches the stale window's edge, PIN that edge to the
-      // viewport edge: the clamp is continuous at the boundary, so content
-      // never moves backward (no rubberband) and the pane never blanks.
+      // In-flight read: stale rows track their true content position while it
+      // still covers the viewport, then their EDGE pins to the viewport edge.
+      // The clamp is continuous at the boundary — no backward motion, no
+      // blanking. (The sticky layer means the compositor can't move them
+      // either way; all motion below is ours.)
       this.glued = true;
-      const { layerY, rows } = this.painted;
+      const { contentTop, rows } = this.painted;
       const rowsPx = rows * ROW_H;
-      const y =
-        rowsPx >= clipH
-          ? Math.min(Math.max(layerY, scrollTop + clipH - rowsPx), scrollTop)
-          : scrollTop;
-      if (y !== layerY) {
-        this.painted = { layerY: y, rows };
-        this.layer.style.transform = `translate3d(0, ${y}px, 0)`;
-      }
+      let y = contentTop - scrollTop;
+      y = rowsPx >= clipH ? Math.min(Math.max(y, clipH - rowsPx), 0) : 0;
+      this.painted = { contentTop: scrollTop + y, rows };
+      this.placeLayer(y, scrollLeft);
       return;
     }
     this.glued = false;
-    // The layer sits at the window top and carries the sub-cell fractional
-    // offset (spec §6); rows inside are window-relative, so the 10M-px clamp
-    // never reaches element coordinates and sub-row scrolls are one CSS write.
-    const layerTop = scrollTop - (v.anchor - v.firstRow) * ROW_H - v.subCellPx;
-    this.layer.style.transform = `translate3d(0, ${layerTop}px, 0)`;
-    this.painted = { layerY: layerTop, rows: v.lastRow - v.firstRow + 1 };
+    // Layer coordinates are viewport-relative (sticky origin = scrollport
+    // corner): y is just the window's overscan offset + sub-cell fraction —
+    // tiny numbers, so the 10M-px clamp never reaches element coordinates.
+    const y = -(v.anchor - v.firstRow) * ROW_H - v.subCellPx;
+    this.placeLayer(y, scrollLeft);
+    this.painted = { contentTop: scrollTop + y, rows: v.lastRow - v.firstRow + 1 };
     if (!force && sameWindow) return; // geometry-only scroll: rows already stamped
-    const size = poolSize(clipH, ROW_H, rowCount);
+    const size = poolSize(clipH, ROW_H, rowCount, ROW_OVERSCAN);
     const colCount = Math.max(0, c.lastCol - c.firstCol + 1);
     if (size !== this.poolAllocSize || colCount !== this.poolAllocCols) {
       this.pool.setSize(size, colCount);
@@ -450,6 +460,12 @@ export class PspGrid {
       this.poolAllocCols = colCount;
     }
     this.bind(v, c);
+  }
+
+  /** Position the sticky layer: y viewport-relative, x counteracts horizontal scroll. */
+  private placeLayer(y: number, scrollLeft: number): void {
+    this.layerY = y;
+    this.layer.style.transform = `translate3d(${-scrollLeft}px, ${y}px, 0)`;
   }
 
   /** Stamp the pool from the current frame and report paint cost to the throttle. */
