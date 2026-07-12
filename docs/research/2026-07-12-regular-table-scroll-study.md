@@ -133,6 +133,25 @@ regular-table structurally cannot do — so within-window and small scrolls are
 compositor-smooth with zero JS, and the stale-window path only engages when
 the engine genuinely lags the scroll.
 
+## 5b. Addendum (same day): why clip-pinning is load-bearing — async scroll
+
+Follow-up user reports (flicker/jerk/blank persisting under real input)
+exposed the one regular-table property the first pass under-weighted:
+**content must not live in scroll space at all.** Real wheel/trackpad
+scrolling is asynchronous compositor scrolling — the compositor moves
+scroll-space content and paints *before* any main-thread rAF handler runs, so
+a scroll-space row layer is displaced for at least one painted frame per
+input, no matter how fast the sync is. Synthetic `scrollTop` writes commit in
+the same frame as the correcting sync and can never reproduce this; only
+`mouse.wheel` (real input) shows it. pgrid adopted the equivalent of the
+clip-pin: the row layer is `position: sticky` (compositor-pinned), rows are
+viewport-relative, and all motion — both axes — is written by the sync
+(`7169cf1`). Row overscan was raised to 12 (columns keep 4) since vertical
+windows move every 26px vs ~120px per column. Verified with real
+`mouse.wheel` in an isolated tab under the full feed: vertical 763 frames,
+0 backward movements, 100% min/avg viewport coverage; horizontal identical
+coverage.
+
 ## 6. Verification snapshots (pgrid, 20k×372 @ ~10k updates/s, warm)
 
 - Sustained wheel scroll (80px/50ms, 4s): **0 backward row movements** in 485
