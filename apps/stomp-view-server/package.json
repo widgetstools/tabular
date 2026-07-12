@@ -1,0 +1,26 @@
+{
+  "name": "stomp-view-server",
+  "version": "1.0.0",
+  "description": "TypeScript STOMP view server: FI snapshots + live updates (protocol-compatible with stomp-fixed-income-server)",
+  "main": "dist/main.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/main.js",
+    "dev": "tsx watch src/main.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^16.5.0",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "license": "ISC"
+}

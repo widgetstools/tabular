@@ -6,6 +6,7 @@ import { RenderersPage } from './pages/RenderersCatalog';
 import { BasicPage } from './pages/Basic';
 import { BigDataPage } from './pages/BigData';
 import { ExtremePage } from './pages/Extreme';
+import { StompLivePage } from './pages/StompLive';
 import { LiveTicksPage } from './pages/LiveTicks';
 import { RealtimeAggPage } from './pages/RealtimeAgg';
 import { SortFilterPage } from './pages/SortFilter';
@@ -42,6 +43,7 @@ const PAGES = [
   { id: 'basic', label: 'Basic grid', component: BasicPage },
   { id: 'big', label: '100k rows', component: BigDataPage },
   { id: 'extreme', label: '1M × 500 bench', component: ExtremePage },
+  { id: 'stomp', label: 'STOMP live feed', component: StompLivePage },
   { id: 'ticks', label: 'Live ticks & flash', component: LiveTicksPage },
   { id: 'rtagg', label: 'Realtime agg (worker)', component: RealtimeAggPage },
   { id: 'sortfilter', label: 'Sorting & filtering', component: SortFilterPage },
