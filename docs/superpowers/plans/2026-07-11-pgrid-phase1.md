@@ -22,6 +22,7 @@ Each task below is sized for one working session. Session protocol:
 | Date | Task | Result | Notes / deviations |
 |---|---|---|---|
 | _(append rows here)_ | | | |
+| 2026-07-12 | Task 4 | ✅ `pgrid-view-host OK`, `tsc -p packages/pgrid` + full `npm run typecheck` green, commit `f7e4863` | Three deviations, all engine-reality-driven (probed the real engine before implementing). (1) **Leaf-level injection**: Perspective's grouped tree is exactly `group_by.length` levels deep — with `group_by:['desk']` there is no leaf level and `expand` past it throws ("Cannot expand past 1"). ViewHost appends the table's index column (`table.get_index()`) to the **engine** `group_by`, giving groups expandable leaf rows (ag-grid semantics); the user-facing `PspViewConfig` is untouched and remains the equivalence key, so the plan's test passes unchanged (3 rows at depth 0 → 4 after `expand(1)`). Leaves are rows whose `path.length > ` user `group_by.length`. (2) **aggDepth resolved**: the FinOS datagrid's blanking rule is `path.length < min(column.aggregate_depth ?? 0, group_by.length)` — a per-column opt-in defaulting to 0, i.e. **no blanking by default**. Implemented as a `ViewHost.aggDepth` hook (0 in phase 1) rather than unconditional blanking, which would have blanked the ticking group aggregates the project exists for. (3) Test script wrapped in `main()` with dynamic `import()` of engine (same Task 1 CJS constraint); `viewHost.ts` itself uses only type-level perspective imports so its static import is safe. Also: `set_depth` clamps to the engine tree depth (it throws past it), `-1` maps to expand-all. |
 | 2026-07-12 | Task 3 | ✅ `pgrid-view-compiler OK`, `tsc -p packages/pgrid` + full `npm run typecheck` green, commit `cada2e3` | No deviations — direct mapping as planned; test passed on first run after implementation. Two unstated details made explicit: (1) unknown filter ops **throw** rather than being silently dropped (a dropped filter would render wrong data); (2) `columns` uses value fields when `group_by` **or** `split_by` is nonempty (pivot-only views are aggregated too), matching the test's grouped/flat split. |
 | 2026-07-12 | Task 2 | ✅ `pgrid-window-math OK`, `tsc -p packages/pgrid` + full `npm run typecheck` green, commit `6afb126` | No deviations — test and math implemented exactly as planned; test passed on first run after implementation. One unstated detail made explicit: the plan leaves the `overscan` default unspecified, so a single `DEFAULT_OVERSCAN = 4` is shared by `computeViewport`, `poolSize`, and `visibleCols` — viewport and pool sizing must agree on overscan or `poolSlot` collides when callers omit it. |
 | 2026-07-11 | Task 1 | ✅ `pgrid-engine OK`, typecheck green, commit `06e0e70` | Two deviations. (1) The `node` entry of `@finos/perspective@3.8.0` has **no `worker()` factory** — it boots the engine in-process via top-level await at import and default-exports a module-level client facade (`{table, websocket, system_info, ...}`); `ensureEngine`'s node branch returns that default cast as `Client` (structurally sufficient — we only call `.table`). Browser branch unchanged (tsc under `moduleResolution: bundler` resolves browser types, so `worker`/`init_client`/`init_server` typecheck natively; no `vite-env.d.ts` needed — `as string` on the `?url` specifiers suffices). (2) Test script: `scripts/` is CJS-scoped (root package.json lacks `"type": "module"`) and perspective's ESM node entry can't be CJS-transformed (top-level await), so the plan's top-level-await test body is wrapped in `main()` and the engine module loaded via native dynamic `import()`. Same file name, same run command, same assertions. |
@@ -344,7 +345,7 @@ export class ViewHost {
 }
 ```
 
-- [ ] **Step 1: Write the failing test** — `scripts/pgrid-view-host.ts` (real engine, node):
+- [x] **Step 1: Write the failing test** — `scripts/pgrid-view-host.ts` (real engine, node):
 
 ```ts
 import assert from 'node:assert/strict';
@@ -390,15 +391,15 @@ console.log('pgrid-view-host OK');
 process.exit(0);
 ```
 
-- [ ] **Step 2: Run — expect FAIL.**
-- [ ] **Step 3: Implement `viewHost.ts`** per spec §5. Key behaviors:
+- [x] **Step 2: Run — expect FAIL.**
+- [x] **Step 3: Implement `viewHost.ts`** per spec §5. Key behaviors:
   - `setConfig`: `isEquivalent(current, next) && view` → no-op (return). Else `table.raw().view(cfg as never)` FIRST, then swap, then `old.delete()` (never a gap with no view); subscribe `view.on_update(handler)`; `set_depth(groupDefaultExpanded)` when `group_by.length > 0`; refresh caches (`num_rows`, `column_paths()` meta-filtered).
   - `window`: `to_columns_string({ start_row, end_row: lastRow + 1, start_col, end_col: lastCol + 1, id: true })` → parse; build `WindowSlice`: metas from `__ROW_PATH__` (kind = path.length < group_by.length+? → group; level = path.length; id from `__ID__` join('|') for leaves, path join for groups; expanded = engine doesn't say — set true and let Task 7 derive chevron state from child visibility: a group row is *expanded* iff the next view row's path is deeper. Compute that here from the slice, and for the last row of the slice read one row ahead in the same call by requesting `lastRow + 2`).
   - Aggregate blanking (spec §5.3): value for a group cell whose `path.length < aggDepth` → `null`.
   - on_update handler: adaptive throttle — record `lastPaintMs` (set by grid via `notePaintDuration(ms)`, add that method to the class); coalesce with a trailing-edge timer of `max(16, lastPaintMs)`; on fire: `num_rows()` refresh (or `dimensions().num_view_rows` when split_by nonempty), invoke `events.onModelUpdated(countChanged)`.
   - `expand/collapse`: engine call, then refresh `num_rows`, then resolve (caller awaits and redraws — Global Constraints).
-- [ ] **Step 4: Run — expect `pgrid-view-host OK`;** typecheck.
-- [ ] **Step 5: Commit** — `git commit -m "feat(pgrid): ViewHost — view lifecycle, windows, expand, push updates"`.
+- [x] **Step 4: Run — expect `pgrid-view-host OK`;** typecheck.
+- [x] **Step 5: Commit** — `git commit -m "feat(pgrid): ViewHost — view lifecycle, windows, expand, push updates"`.
 
 ---
 
