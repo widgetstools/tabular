@@ -206,6 +206,19 @@ Spec §8 success criteria: **all met** — p95 well under 16ms with desk→curre
 grouping at 10k updates/s, zero dropped frames on 3s sweeps (both axes), and
 aggregates tick with no refresh cadence configured anywhere.
 
+**OpenFin follow-up (same day).** The same bench driven inside OpenFin
+(runtime 43.142.104.1, CDP on :9092, showcase manifest): desk→currency tree
+sweep p50 8.3 / p95 12.4 / worst 61.7ms with one frame >20ms (a single
+compositor hitch; Chrome had none), aggregate cadence **13/s** (faster than
+the Chrome runs — that browser session was sharing the feed with other page
+connections), rows visible during the sweep avg 15.6 of 24 (worst-sample 2).
+Same-day fix shipped with these runs: **scroll continuity** (`57926c1`) —
+fast scrolling used to outrun the ~300ms engine window reads and blank the
+viewport; in-flight windows now glue the previously painted pixels to the
+viewport (the FinOS datagrid's stale-window-mid-fetch behavior). Measured in
+Chrome: 20/20 viewport rows visible at every sample of a full-range 4s sweep
+over 20k flat rows (was 1/20), zero blanks and correct rows on settle.
+
 Interpretation. Frame health is renderer-bound and equal across all three —
 every grid idles at display cadence during sweeps; pgrid's recycled pool +
 draw-skip does what regular-table does. The separation is the *data* path:
