@@ -10,6 +10,9 @@
     "openfin": "node launch.mjs http://localhost:5173/openfin/app.json"
   },
   "dependencies": {
+    "@finos/perspective": "^3.8.0",
+    "@finos/perspective-viewer": "^3.8.0",
+    "@finos/perspective-viewer-datagrid": "^3.8.0",
     "@tabular/core": "*",
     "@tabular/dom": "*",
     "@tabular/edit": "*",

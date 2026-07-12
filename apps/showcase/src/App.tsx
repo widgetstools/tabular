@@ -9,6 +9,7 @@ import { ExtremePage } from './pages/Extreme';
 import { StompLivePage } from './pages/StompLive';
 import { LiveTicksPage } from './pages/LiveTicks';
 import { RealtimeAggPage } from './pages/RealtimeAgg';
+import { PerspectiveGridPage } from './pages/PerspectiveGrid';
 import { SortFilterPage } from './pages/SortFilter';
 import { EditingPage } from './pages/Editing';
 import { SelectionPage } from './pages/Selection';
@@ -46,6 +47,7 @@ const PAGES = [
   { id: 'stomp', label: 'STOMP live feed', component: StompLivePage },
   { id: 'ticks', label: 'Live ticks & flash', component: LiveTicksPage },
   { id: 'rtagg', label: 'Realtime agg (worker)', component: RealtimeAggPage },
+  { id: 'perspective', label: 'Perspective (FinOS)', component: PerspectiveGridPage },
   { id: 'sortfilter', label: 'Sorting & filtering', component: SortFilterPage },
   { id: 'floating', label: 'Floating filters', component: FloatingFiltersPage },
   { id: 'editing', label: 'Editing', component: EditingPage },

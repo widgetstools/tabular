@@ -194,6 +194,18 @@ body.light .controls button.on { border-color: #3C7CAB; color: #3C7CAB; }
 
 body.light .grid-wrap { border-color: #D4D4D4; }
 
+/* Embedded <perspective-viewer> host (Perspective page). */
+.perspective-wrap {
+  display: flex;
+  flex-direction: column;
+}
+
+.perspective-empty {
+  margin: auto;
+  color: #808080;
+  font-size: 13px;
+}
+
 .status {
   display: flex;
   gap: 18px;
