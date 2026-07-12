@@ -390,22 +390,21 @@ export class PspGrid {
     this.header.setScrollLeft(this.scroller.scrollLeft);
     const lv = this.lastV;
     const lc = this.lastC;
-    // Draw-skip fast path: logical window and sub-cell offset unchanged.
-    if (
-      !force &&
-      lv &&
-      lc &&
+    const sameWindow =
+      !!lv &&
+      !!lc &&
       lv.firstRow === v.firstRow &&
       lv.lastRow === v.lastRow &&
-      lv.subCellPx === v.subCellPx &&
       lc.firstCol === c.firstCol &&
-      lc.lastCol === c.lastCol
-    ) {
-      return;
-    }
+      lc.lastCol === c.lastCol;
+    // Draw-skip fast path: logical window and sub-cell offset unchanged.
+    if (!force && sameWindow && lv.subCellPx === v.subCellPx) return;
     this.lastV = v;
     this.lastC = c;
-    rv.requestWindow(v, c);
+    // Only a changed window needs an engine read — sub-row scrolling within
+    // the same window is pure geometry (regular-table's cheap-scroll path;
+    // a redundant fetch would queue behind update batches and slow ticks).
+    if (force || !sameWindow) rv.requestWindow(v, c);
     const scrollTop = this.scroller.scrollTop;
     if (!rv.rowMeta(v.anchor) && this.painted) {
       // The engine hasn't caught up to this window (read in flight): glue the
@@ -419,11 +418,13 @@ export class PspGrid {
       return;
     }
     this.glued = false;
-    // The layer sits at the window top; rows inside are window-relative, so
-    // the 10M-px clamp never reaches element coordinates.
-    const layerTop = scrollTop - (v.anchor - v.firstRow) * ROW_H;
+    // The layer sits at the window top and carries the sub-cell fractional
+    // offset (spec §6); rows inside are window-relative, so the 10M-px clamp
+    // never reaches element coordinates and sub-row scrolls are one CSS write.
+    const layerTop = scrollTop - (v.anchor - v.firstRow) * ROW_H - v.subCellPx;
     this.layer.style.transform = `translate3d(0, ${layerTop}px, 0)`;
     this.painted = { scrollTop, layerTop };
+    if (!force && sameWindow) return; // geometry-only scroll: rows already stamped
     const size = poolSize(clipH, ROW_H, rowCount);
     const colCount = Math.max(0, c.lastCol - c.firstCol + 1);
     if (size !== this.poolAllocSize || colCount !== this.poolAllocCols) {

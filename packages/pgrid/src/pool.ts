@@ -136,7 +136,10 @@ export class RowPool {
   }
 
   private place(el: HTMLElement, rowIndex: number, v: Viewport, geo: PoolGeometry): void {
-    el.style.transform = `translate3d(0, ${(rowIndex - v.firstRow) * geo.rowHeight - v.subCellPx}px, 0)`;
+    // Window-relative only: the sub-cell fractional offset lives in the LAYER
+    // transform (spec §6, regular-table's model), so sub-row scrolling within
+    // an unchanged window is one CSS write instead of a full pool re-stamp.
+    el.style.transform = `translate3d(0, ${(rowIndex - v.firstRow) * geo.rowHeight}px, 0)`;
   }
 
   private stampCell(
