@@ -200,6 +200,8 @@ export function PGridPage() {
             schema={meta.schema}
             onReady={(grid) => {
               gridRef.current = grid;
+              // Bench hook (Task 10): lets the harness probe latency/heap.
+              (window as unknown as Record<string, unknown>).__pgrid = grid;
               void grid
                 .load(meta.flatRows)
                 .then(() => setPhase('live'))

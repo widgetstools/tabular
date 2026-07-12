@@ -181,7 +181,51 @@ transactions, no special-casing of aggregate vs leaf rows.
   `ViewHost` are the two interfaces that must not leak Perspective types to
   make this possible (enforced from P1).
 
-## 10. Risks & mitigations
+## 10. Phase 1 results (2026-07-12 addendum)
+
+Bench setup: showcase `PGrid (P-native)` page, 20k rows × 372 union-schema
+columns from the STOMP feed at ~10k row-updates/s (200 msgs/s × 50), dev
+build, 120Hz display, playwright-driven 3s sweeps sampling rAF deltas.
+Comparators on the same feed: `Perspective 20k × all cols` (FinOS
+perspective-viewer-datagrid) and agref `Perspective SSRM (FinOS)` (ag-grid
+SSRM over the engine, polled aggregates). Caveat: the browser tab was shared
+with concurrent interactive use; numbers are from interference-checked runs.
+
+| Metric (under 10k updates/s) | pgrid | FinOS datagrid | ag-grid SSRM |
+|---|---|---|---|
+| Vertical sweep p50 / p95 / worst (ms) | 9.1 / 12.5 / 14.4 | 8.9 / 12.3 / 14.6 | 8.4 / 13.1 / 18.4 |
+| Frames > 20ms during sweeps | **0** | 0 (grouped); 1, worst 38.3 (flat 4s) | 0 |
+| Horizontal sweep, flat 372 cols (p50/p95/worst) | 8.8 / 12.8 / 18.8, 0 dropped | not measured | n/a |
+| Group-aggregate repaint cadence | **6.0/s** (push) | ~1.4 full-window redraws/s | = polling interval (1s best), by construction |
+| Flat-view change fidelity | every real change painted (diffed) | whole window rewritten per draw; intermediate values skippable | poll-bounded |
+| Tick→paint latency (probe row, group cell) | 274–465ms, median ~371 | not instrumentable (table not exposed) | ≥ polling interval |
+| Engine heap across 20 view rebuilds | used_size 3.448→3.455→3.455MB (16MB heap, flat) — no leak | — | — |
+| Refresh/polling code in the page | **zero** | zero (engine-push, undiffed) | aggregate refresh timer (1s/2s/5s/Off UI) |
+
+Spec §8 success criteria: **all met** — p95 well under 16ms with desk→currency
+grouping at 10k updates/s, zero dropped frames on 3s sweeps (both axes), and
+aggregates tick with no refresh cadence configured anywhere.
+
+Interpretation. Frame health is renderer-bound and equal across all three —
+every grid idles at display cadence during sweeps; pgrid's recycled pool +
+draw-skip does what regular-table does. The separation is the *data* path:
+pgrid repaints aggregates ~4× more often than the FinOS datagrid on the same
+saturated engine (lighter window reads: cached column paths, no per-fetch
+schema round-trips, diffed stamping) and paints every real value change in
+flat views, where the datagrid rewrites whole windows at ~1.4/s and can skip
+intermediate values. SSRM's cadence is its polling interval by definition —
+the refresh-timer UI pgrid exists to delete. Tick→paint latency (~370ms
+median) is engine-queue-bound for everyone: reads serialize behind pending
+update batches in the single-threaded WASM worker; this is the P4
+SharedArrayBuffer/worker-materializer target (§9), not a phase-1 renderer
+problem. Node-side leak check: alternating grouped↔pivoted rebuilds ×20 left
+engine used_size flat after the first rebuild — the swap-then-delete lifecycle
+(§5.5) holds. One engine footnote: the node in-process engine threw a
+detached-ArrayBuffer error growing WASM memory under a 20k-row single-table
+load (browser worker engine handles the same load fine); the leak check ran
+at 5k rows.
+
+## 11. Risks & mitigations
 
 - **View-index expand/collapse under ticking**: expand(y) uses a row index
   that can shift between read and click. Mitigation: expand uses the row's
