@@ -13,7 +13,7 @@
     "dev:agref": "npm run dev -w apps/agref",
     "dev:stomp": "npm run dev -w stomp-view-server",
     "build": "npm run typecheck && npm run build -w apps/showcase && npm run build -w apps/blotter",
-    "typecheck": "tsc -p packages/expression && tsc -p packages/calc && tsc -p packages/rules && tsc -p packages/format && tsc -p packages/renderers && tsc -p packages/edit && tsc -p packages/ext && tsc -p packages/core && tsc -p packages/dom && tsc -p packages/react && tsc -p apps/showcase && tsc -p apps/blotter && tsc -p apps/agref",
+    "typecheck": "tsc -p packages/expression && tsc -p packages/calc && tsc -p packages/rules && tsc -p packages/format && tsc -p packages/renderers && tsc -p packages/edit && tsc -p packages/ext && tsc -p packages/core && tsc -p packages/dom && tsc -p packages/react && tsc -p packages/pgrid && tsc -p apps/showcase && tsc -p apps/blotter && tsc -p apps/agref",
     "worker-compare": "npx tsx scripts/worker-compare.ts",
     "worker-budget": "npx tsx scripts/worker-budget.ts",
     "test:worker": "npm run worker-compare && npm run worker-budget",
