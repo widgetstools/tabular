@@ -109,11 +109,10 @@ export class Materializer implements RenderView {
     const path = s.cols[c];
     const raw = s.values[c][r];
     const def = this.getColDef(path);
-    // Group rows label the first visible column with the deepest path part —
-    // but only where the aggregate is blanked (aggDepth opt-in): visible
-    // ticking group aggregates are the point of the project.
-    const text =
-      meta.kind === 'group' && c === 0 && raw == null ? groupLabel(meta) : formatValue(raw, def);
+    // Null aggregates (blanked via aggDepth, or empty pivot intersections)
+    // render blank. Group labels are the auto group column's job (grid.ts) —
+    // painting them into data cells mislabels empty pivot cells.
+    const text = formatValue(raw, def);
     let flash: 1 | -1 | 0 = 0;
     const old = this.prevFrame.get(`${meta.id} ${path}`);
     if (old !== undefined && !Object.is(old, raw)) {
